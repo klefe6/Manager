@@ -1,0 +1,98 @@
+# Cloudflare Tunnel Configuration
+# Maps local ports to Cloudflare domain names
+#
+# Setup Instructions:
+# 1. Install cloudflared: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/
+# 2. Run: cloudflared tunnel login
+# 3. Run: cloudflared tunnel create <tunnel-name>
+# 4. Update tunnel_id below with your tunnel ID
+# 5. Run: cloudflared tunnel route dns <tunnel-name> <subdomain>.<your-domain.com>
+# 6. Start tunnel: cloudflared tunnel run <tunnel-name>
+
+tunnel: <YOUR_TUNNEL_ID>
+credentials-file: C:\Program Files\Coding Projects\Manager\.cloudflared\<YOUR_TUNNEL_ID>.json
+
+ingress:
+  # TWIFO Import Dropbox (Streamlit - Port 8001)
+  - hostname: import-dropbox.hcresearch.ltd
+    service: http://localhost:8001
+  
+  # Price Dashboard (Port 8002)
+  - hostname: price-dashboard.hcresearch.ltd
+    service: http://localhost:8002
+  
+  # Sector RRG (Port 8003)
+  - hostname: sector-rrg.hcresearch.ltd
+    service: http://localhost:8003
+  
+  # Strategy Optimizer (Port 8004)
+  - hostname: strategy-optimizer.hcresearch.ltd
+    service: http://localhost:8004
+  
+  # Home Page (Port 8005)
+  - hostname: homepage.hcresearch.ltd
+    service: http://localhost:8005
+  
+  # Debug Page / Service Dashboard (Port 8006)
+  - hostname: debug.hcresearch.ltd
+    service: http://localhost:8006
+  
+  # Dev alias for Debug Page
+  - hostname: dev.hcresearch.ltd
+    service: http://localhost:8006
+  
+  # QuantLab Dashboard (Streamlit - Port 8501)
+  - hostname: quantlab.hcresearch.ltd
+    service: http://localhost:8501
+  
+  # TWIFO Sharing
+  - hostname: twifo.hcresearch.ltd
+    service: http://localhost:8065
+  
+  # TKP Tearsheet
+  - hostname: tkp-ts.hcresearch.ltd
+    service: http://localhost:8076
+  
+  # Y&Q Tearsheet
+  - hostname: yq-ts.hcresearch.ltd
+    service: http://localhost:8071
+  
+  # Gold Maker
+  - hostname: tgm-ts.hcresearch.ltd
+    service: http://localhost:8075
+  
+  # Sector Ratio Service
+  - hostname: secratio.hcresearch.ltd
+    service: http://localhost:8080
+  
+  # ES Historical Data
+  - hostname: es-historical.hcresearch.ltd
+    service: http://localhost:8081
+  
+  # Almanac Futures
+  - hostname: almanac.hcresearch.ltd
+    service: http://localhost:8072
+  
+  # TS Generator
+  - hostname: ts-generator.hcresearch.ltd
+    service: http://localhost:8077
+  
+  # Agent Control Center (FastAPI - Port 8007)
+  - hostname: agents.hcresearch.ltd
+    service: http://localhost:8007
+  
+  # Trading Video Library (Docker - Frontend Port 3003)
+  - hostname: trading-video-library.hcresearch.ltd
+    service: http://localhost:3003
+  
+  # Summary Engine (Docker - Frontend Port 3001)
+  - hostname: summary.hcresearch.ltd
+    service: http://localhost:3001
+  
+  # VizLab (Next.js - Port 8011)
+  - hostname: vizlab.hcresearch.ltd
+    service: http://localhost:8011
+  
+  
+  # Catch-all (must be last)
+  - service: http_status:404

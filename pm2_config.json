@@ -1,0 +1,79 @@
+{
+  "services": {
+    "Debug Page": "C:\\Program Files\\Coding Projects\\HomePage\\reboot_debug.bat",
+    "TWIFO Sharing": "C:\\Program Files\\Coding Projects\\TWIFO_Sharing\\reboot_twifo.bat",
+    "Import Dropbox": "C:\\Program Files\\Coding Projects\\TWIFO_Sharing\\reboot_import_dropbox.bat",
+    "TS Generator": "C:\\Program Files\\Coding Projects\\Tearsheet Generator\\run_tsgen.bat",
+    "TKP Tearsheet": "C:\\Program Files\\Coding Projects\\Tearsheet Generator\\reboot_tkp_ts.bat",
+    "Y&Q Tearsheet": "C:\\Program Files\\Coding Projects\\Tearsheet Generator\\reboot_yq_ts.bat",
+    "Gold Maker": "C:\\Program Files\\Coding Projects\\Tearsheet Generator\\reboot_gold_maker.bat",
+    "Price Dashboard": "C:\\Program Files\\Coding Projects\\Price Dashboard\\reboot_dashboard.bat",
+    "Strategy Opt": "C:\\Program Files\\Coding Projects\\StrategyOptimizer\\reboot_strategy_optimizer.bat",
+    "Home Page": "C:\\Program Files\\Coding Projects\\HomePage\\reboot_homepage.bat",
+    "Sector Ratio": "C:\\Program Files\\Coding Projects\\GSR\\reboot_gsr.bat",
+    "ES Historical": "C:\\Program Files\\Coding Projects\\ES Historical Data\\reboot_es_historical_data.bat",
+    "Almanac Futures": "C:\\Program Files\\Coding Projects\\Almanac Futures\\reboot_almanac.bat"
+  },
+  "ports": {
+    "TWIFO Sharing": [
+      "127.0.0.1",
+      8065
+    ],
+    "Import Dropbox": [
+      "127.0.0.1",
+      8501
+    ],
+    "TS Generator": [
+      "127.0.0.1",
+      8077
+    ],
+    "TKP Tearsheet": [
+      "127.0.0.1",
+      8076
+    ],
+    "Y&Q Tearsheet": [
+      "127.0.0.1",
+      8071
+    ],
+    "Gold Maker": [
+      "127.0.0.1",
+      8075
+    ],
+    "Price Dashboard": [
+      "127.0.0.1",
+      3000
+    ],
+    "Strategy Opt": [
+      "127.0.0.1",
+      8080
+    ],
+    "Home Page": [
+      "127.0.0.1",
+      8050
+    ],
+    "Debug Page": [
+      "127.0.0.1",
+      8060
+    ],
+    "Sector Ratio": [
+      "127.0.0.1",
+      8080
+    ],
+    "ES Historical": [
+      "127.0.0.1",
+      8081
+    ],
+    "Almanac Futures": [
+      "127.0.0.1",
+      8072
+    ]
+  },
+  "restart_interval": 21600,
+  "launch_pause": 8,
+  "startup_delay": 120,
+  "performance_monitoring": true,
+  "performance_interval": 300,
+  "cpu_threshold": 80,
+  "memory_threshold": 1024,
+  "hourly_restart_enabled": false
+}

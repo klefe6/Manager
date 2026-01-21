@@ -1,0 +1,129 @@
+{
+  "launched_at": "2026-01-19T22:17:44.778792",
+  "services": {
+    "TWIFO Sharing": {
+      "name": "TWIFO Sharing",
+      "pid": 43620,
+      "type": "bat",
+      "bat_file": "C:\\Program Files\\Coding Projects\\TWIFO_Sharing\\reboot_twifo.bat"
+    },
+    "Import Dropbox": {
+      "name": "Import Dropbox",
+      "pid": 40588,
+      "type": "bat",
+      "bat_file": "C:\\Program Files\\Coding Projects\\TWIFO_Sharing\\reboot_import_dropbox.bat"
+    },
+    "TS Generator": {
+      "name": "TS Generator",
+      "pid": 48008,
+      "type": "bat",
+      "bat_file": "C:\\Program Files\\Coding Projects\\Tearsheet Generator\\run_tsgen.bat"
+    },
+    "TKP Tearsheet": {
+      "name": "TKP Tearsheet",
+      "pid": 4660,
+      "type": "bat",
+      "bat_file": "C:\\Program Files\\Coding Projects\\Tearsheet Generator\\reboot_tkp_ts.bat"
+    },
+    "Y&Q Tearsheet": {
+      "name": "Y&Q Tearsheet",
+      "pid": 46736,
+      "type": "bat",
+      "bat_file": "C:\\Program Files\\Coding Projects\\Tearsheet Generator\\reboot_yq_ts.bat"
+    },
+    "Gold Maker": {
+      "name": "Gold Maker",
+      "pid": 36488,
+      "type": "bat",
+      "bat_file": "C:\\Program Files\\Coding Projects\\Tearsheet Generator\\reboot_gold_maker.bat"
+    },
+    "Sector Ratio": {
+      "name": "Sector Ratio",
+      "pid": 65456,
+      "type": "bat",
+      "bat_file": "C:\\Program Files\\Coding Projects\\GSR\\reboot_gsr.bat"
+    },
+    "ES Historical": {
+      "name": "ES Historical",
+      "pid": 55676,
+      "type": "bat",
+      "bat_file": "C:\\Program Files\\Coding Projects\\ES Historical Data\\reboot_es_historical_data.bat"
+    },
+    "Almanac Futures": {
+      "name": "Almanac Futures",
+      "pid": 49696,
+      "type": "bat",
+      "bat_file": "C:\\Program Files\\Coding Projects\\Almanac Futures\\reboot_almanac.bat"
+    },
+    "Price Dashboard": {
+      "name": "Price Dashboard",
+      "pid": 55976,
+      "type": "dash",
+      "port": 8002,
+      "url": "http://localhost:8002"
+    },
+    "Sector RRG": {
+      "name": "Sector RRG",
+      "pid": 15900,
+      "type": "dash",
+      "port": 8003,
+      "url": "http://localhost:8003"
+    },
+    "Strategy Optimizer": {
+      "name": "Strategy Optimizer",
+      "pid": 54068,
+      "type": "dash",
+      "port": 8004,
+      "url": "http://localhost:8004"
+    },
+    "Home Page": {
+      "name": "Home Page",
+      "pid": 55032,
+      "type": "dash",
+      "port": 8005,
+      "url": "http://localhost:8005"
+    },
+    "Debug Page": {
+      "name": "Debug Page",
+      "pid": 38604,
+      "type": "dash",
+      "port": 8006,
+      "url": "http://localhost:8006"
+    },
+    "QuantLab Dashboard": {
+      "name": "QuantLab Dashboard",
+      "pid": 38964,
+      "type": "streamlit",
+      "port": 8501,
+      "url": "http://localhost:8501"
+    },
+    "Agent Control Center": {
+      "name": "Agent Control Center",
+      "pid": 71088,
+      "type": "fastapi",
+      "port": 8007,
+      "url": "http://localhost:8007"
+    },
+    "Trading Video Library": {
+      "name": "Trading Video Library",
+      "pid": 60320,
+      "type": "docker-compose",
+      "ports": [
+        8000,
+        3003
+      ],
+      "urls": {
+        "backend": "http://localhost:8000",
+        "frontend": "http://localhost:3003"
+      },
+      "url": "http://localhost:3003"
+    },
+    "VizLab": {
+      "name": "VizLab",
+      "pid": 43512,
+      "type": "nextjs",
+      "port": 8011,
+      "url": "http://localhost:8011"
+    }
+  }
+}

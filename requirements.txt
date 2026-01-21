@@ -1,2 +1,4 @@
-# No external dependencies required - uses only Python standard library
+# PM2 Monitor dependencies
+psutil>=5.9.0  # Process and system utilities for process management
+
 # Python 3.8+ recommended for optimal performance

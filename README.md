@@ -107,7 +107,7 @@ Manager/
 - **Strategy Optimizer**: Trading strategy optimization (Port 8080)
 - **Home Page**: Main trading dashboard (Port 8050)
 - **Debug Page**: Development and debugging interface (Port 8060)
-- **GSR Service**: Gold-silver ratio analysis (Port 8070)
+- **Sector Ratio**: Sector ratio service for market data processing (Port 8080)
 - **ES Historical**: Options data analysis (Port 8071)
 - **Almanac Futures**: Futures market analysis (Port 8072)
 
