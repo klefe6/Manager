@@ -18,7 +18,7 @@ All Streamlit applications now use **FIXED ports** - no auto-incrementing. This 
 - **Description**: Research monitor dashboard for QuantLab strategy search system
 - **Run manually**: 
   ```powershell
-  cd "C:\Program Files\Coding Projects\QuantLab"
+  cd "C:\Coding Projects\QuantLab"
   .\venv\Scripts\streamlit.exe run dashboard/app.py --server.port 8501
   ```
 
@@ -29,7 +29,7 @@ All Streamlit applications now use **FIXED ports** - no auto-incrementing. This 
 - **Description**: Dropbox file management interface for TWIFO sharing system
 - **Run manually**: 
   ```powershell
-  cd "C:\Program Files\Coding Projects\TWIFO_Sharing"
+  cd "C:\Coding Projects\TWIFO_Sharing"
   .\.venv13\Scripts\streamlit.exe run import_dropbox.py --server.port 8502
   ```
 

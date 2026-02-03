@@ -21,7 +21,7 @@ The PM2 monitor was failing to properly start Almanac Futures, running an old ve
 ## Fixes Applied
 
 ### 1. **Fixed Port Configuration** ✅
-**File**: `C:\Program Files\Coding Projects\Almanac Futures\Almanac_main.py`
+**File**: `C:\Coding Projects\Almanac Futures\Almanac_main.py`
 ```python
 # Changed from:
 app.run(host='127.0.0.1', port=8085, debug=True)

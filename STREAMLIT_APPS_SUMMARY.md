@@ -20,7 +20,7 @@ All Streamlit applications now use **FIXED ports** - no auto-incrementing behavi
 
 **Manual Launch:**
 ```powershell
-cd "C:\Program Files\Coding Projects\QuantLab"
+cd "C:\Coding Projects\QuantLab"
 .\venv\Scripts\streamlit.exe run dashboard/app.py --server.port 8501
 ```
 
@@ -41,7 +41,7 @@ cd "C:\Program Files\Coding Projects\QuantLab"
 
 **Manual Launch:**
 ```powershell
-cd "C:\Program Files\Coding Projects\TWIFO_Sharing"
+cd "C:\Coding Projects\TWIFO_Sharing"
 .\.venv13\Scripts\streamlit.exe run import_dropbox.py --server.port 8502
 ```
 
@@ -92,7 +92,7 @@ The comprehensive launcher (`launch_all_services.py`) now:
 
 **Launch everything:**
 ```powershell
-cd "C:\Program Files\Coding Projects\Manager"
+cd "C:\Coding Projects\Manager"
 python launch_all_services.py
 ```
 
@@ -161,7 +161,7 @@ After launching, verify ports are correct:
 
 1. **Check service registry:**
    ```powershell
-   Get-Content "C:\Program Files\Coding Projects\Manager\service_registry.json"
+   Get-Content "C:\Coding Projects\Manager\service_registry.json"
    ```
 
 2. **Test URLs:**

@@ -56,7 +56,7 @@ if (-not $tunnelId) {
 # Step 4: Update config file
 Write-Host ""
 Write-Host "Step 4: Updating configuration file..." -ForegroundColor Cyan
-$configFile = "C:\Program Files\Coding Projects\Manager\cloudflare_tunnel_config.yaml"
+$configFile = "C:\Coding Projects\Manager\cloudflare_tunnel_config.yaml"
 $configContent = Get-Content $configFile -Raw
 
 # Replace tunnel ID

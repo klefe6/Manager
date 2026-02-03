@@ -10,12 +10,12 @@
 # 6. Start tunnel: cloudflared tunnel run <tunnel-name>
 
 tunnel: <YOUR_TUNNEL_ID>
-credentials-file: C:\Program Files\Coding Projects\Manager\.cloudflared\<YOUR_TUNNEL_ID>.json
+credentials-file: C:\Coding Projects\Manager\.cloudflared\<YOUR_TUNNEL_ID>.json
 
 ingress:
-  # TWIFO Import Dropbox (Streamlit - Port 8001)
+  # TWIFO Import Dropbox (Streamlit - Port 8009)
   - hostname: import-dropbox.hcresearch.ltd
-    service: http://localhost:8001
+    service: http://localhost:8009
   
   # Price Dashboard (Port 8002)
   - hostname: price-dashboard.hcresearch.ltd
@@ -52,6 +52,10 @@ ingress:
   # TKP Tearsheet
   - hostname: tkp-ts.hcresearch.ltd
     service: http://localhost:8076
+  
+  # TCP Tearsheet
+  - hostname: tcp-ts.hcresearch.ltd
+    service: http://localhost:8078
   
   # Y&Q Tearsheet
   - hostname: yq-ts.hcresearch.ltd

@@ -22,7 +22,7 @@ try:
 except ImportError:
     HAS_YAML = False
 
-BASE_DIR = Path(r"C:\Program Files\Coding Projects")
+BASE_DIR = Path(r"C:\Coding Projects")
 CONFIG_FILE = BASE_DIR / "Manager" / "cloudflare_tunnel_config.yaml"
 TUNNEL_LOG_DIR = BASE_DIR / "Manager" / "logs"
 TUNNEL_LOG_DIR.mkdir(parents=True, exist_ok=True)

@@ -48,19 +48,19 @@ LOG_FILE  = "pm2_monitor.log"
 
 # ─── Service Configuration ───────────────────────────────────────────────────
 SERVICES = {
-    "TWIFO Sharing":    r"C:\Program Files\Coding Projects\TWIFO_Sharing\reboot_twifo.bat",
-    "Import Dropbox":   r"C:\Program Files\Coding Projects\TWIFO_Sharing\reboot_import_dropbox.bat",
-    "TS Generator":     r"C:\Program Files\Coding Projects\Tearsheet Generator\run_tsgen.bat",
-    "TKP Tearsheet":    r"C:\Program Files\Coding Projects\Tearsheet Generator\reboot_tkp_ts.bat",
-    "Y&Q Tearsheet":    r"C:\Program Files\Coding Projects\Tearsheet Generator\reboot_yq_ts.bat",
-    "Gold Maker":       r"C:\Program Files\Coding Projects\Tearsheet Generator\reboot_gold_maker.bat",
-    "Price Dashboard":  r"C:\Program Files\Coding Projects\Price Dashboard\reboot_dashboard.bat",
-    "Strategy Opt":     r"C:\Program Files\Coding Projects\StrategyOptimizer\reboot_strategy_optimizer.bat",
-    "Home Page":        r"C:\Program Files\Coding Projects\HomePage\reboot_homepage.bat",
-    "Debug Page":       r"C:\Program Files\Coding Projects\HomePage\reboot_debug.bat",
-    "Sector Ratio":     r"C:\Program Files\Coding Projects\GSR\reboot_gsr.bat",
-    "ES Historical":    r"C:\Program Files\Coding Projects\ES Historical Data\reboot_es_historical_data.bat",
-    "Almanac Futures":  r"C:\Program Files\Coding Projects\Almanac Futures\reboot_almanac.bat",
+    "TWIFO Sharing":    r"C:\Coding Projects\TWIFO_Sharing\reboot_twifo.bat",
+    "Import Dropbox":   r"C:\Coding Projects\TWIFO_Sharing\reboot_import_dropbox.bat",
+    "TS Generator":     r"C:\Coding Projects\Tearsheet Generator\run_tsgen.bat",
+    "TKP Tearsheet":    r"C:\Coding Projects\Tearsheet Generator\reboot_tkp_ts.bat",
+    "Y&Q Tearsheet":    r"C:\Coding Projects\Tearsheet Generator\reboot_yq_ts.bat",
+    "Gold Maker":       r"C:\Coding Projects\Tearsheet Generator\reboot_gold_maker.bat",
+    "Price Dashboard":  r"C:\Coding Projects\Price Dashboard\reboot_dashboard.bat",
+    "Strategy Opt":     r"C:\Coding Projects\StrategyOptimizer\reboot_strategy_optimizer.bat",
+    "Home Page":        r"C:\Coding Projects\HomePage\reboot_homepage.bat",
+    "Debug Page":       r"C:\Coding Projects\HomePage\reboot_debug.bat",
+    "Sector Ratio":     r"C:\Coding Projects\GSR\reboot_gsr.bat",
+    "ES Historical":    r"C:\Coding Projects\ES Historical Data\reboot_es_historical_data.bat",
+    "Almanac Futures":  r"C:\Coding Projects\Almanac Futures\reboot_almanac.bat",
 }
 
 # Health check ports

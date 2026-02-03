@@ -6,7 +6,7 @@
 ### 1. Test Launch All Services
 
 ```powershell
-cd "C:\Program Files\Coding Projects\Manager"
+cd "C:\Coding Projects\Manager"
 python launch_all_services.py
 ```
 
@@ -217,7 +217,7 @@ If new launcher causes issues:
 
 1. **Backup files are NOT created** - use git to revert:
    ```powershell
-   cd "C:\Program Files\Coding Projects"
+   cd "C:\Coding Projects"
    git checkout Manager/launch_all_services.py
    git checkout Manager/service_launcher_utils.py
    git checkout HomePage/debug.py

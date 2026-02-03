@@ -51,7 +51,7 @@ This creates a tunnel named "local-services" and gives you a tunnel ID (looks li
 
 **Option A: Use the Setup Script (Recommended)**
 ```powershell
-cd "C:\Program Files\Coding Projects\Manager"
+cd "C:\Coding Projects\Manager"
 .\setup_cloudflare_tunnel.ps1
 ```
 
@@ -87,7 +87,7 @@ The launcher will automatically start the tunnel if configured.
 
 **Option B: Manual**
 ```powershell
-cloudflared tunnel --config "C:\Program Files\Coding Projects\Manager\cloudflare_tunnel_config.yaml" run
+cloudflared tunnel --config "C:\Coding Projects\Manager\cloudflare_tunnel_config.yaml" run
 ```
 
 **Option C: Using the manager script**
@@ -121,7 +121,7 @@ The following services are mapped to subdomains:
 
 The configuration file is at:
 ```
-C:\Program Files\Coding Projects\Manager\cloudflare_tunnel_config.yaml
+C:\Coding Projects\Manager\cloudflare_tunnel_config.yaml
 ```
 
 Example structure:
@@ -158,7 +158,7 @@ python cloudflare_tunnel_manager.py status
 ### View Logs
 Logs are saved to:
 ```
-C:\Program Files\Coding Projects\Manager\logs\cloudflare_tunnel_*.log
+C:\Coding Projects\Manager\logs\cloudflare_tunnel_*.log
 ```
 
 ## Troubleshooting

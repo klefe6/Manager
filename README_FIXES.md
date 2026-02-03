@@ -47,7 +47,7 @@ Fixed **critical bugs** causing three services to fail:
 
 ### Launch All Services:
 ```powershell
-cd "C:\Program Files\Coding Projects\Manager"
+cd "C:\Coding Projects\Manager"
 python launch_all_services.py
 ```
 

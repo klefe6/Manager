@@ -60,7 +60,7 @@ The `launch_all_services.py` script launches **ALL** your services in one go:
 
 ### Quick Start
 ```powershell
-cd "C:\Program Files\Coding Projects\Manager"
+cd "C:\Coding Projects\Manager"
 python launch_all_services.py
 ```
 

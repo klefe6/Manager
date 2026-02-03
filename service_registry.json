@@ -1,112 +1,125 @@
 {
-  "launched_at": "2026-01-19T22:17:44.778792",
+  "launched_at": "2026-02-02T12:45:28.620983",
   "services": {
     "TWIFO Sharing": {
       "name": "TWIFO Sharing",
-      "pid": 43620,
+      "pid": 59428,
       "type": "bat",
-      "bat_file": "C:\\Program Files\\Coding Projects\\TWIFO_Sharing\\reboot_twifo.bat"
+      "bat_file": "C:\\Coding Projects\\TWIFO_Sharing\\reboot_twifo.bat"
     },
     "Import Dropbox": {
       "name": "Import Dropbox",
-      "pid": 40588,
+      "pid": 3492,
       "type": "bat",
-      "bat_file": "C:\\Program Files\\Coding Projects\\TWIFO_Sharing\\reboot_import_dropbox.bat"
+      "bat_file": "C:\\Coding Projects\\TWIFO_Sharing\\reboot_import_dropbox.bat"
     },
     "TS Generator": {
       "name": "TS Generator",
-      "pid": 48008,
+      "pid": 68848,
       "type": "bat",
-      "bat_file": "C:\\Program Files\\Coding Projects\\Tearsheet Generator\\run_tsgen.bat"
+      "bat_file": "C:\\Coding Projects\\Tearsheet Generator\\run_tsgen.bat"
     },
     "TKP Tearsheet": {
       "name": "TKP Tearsheet",
-      "pid": 4660,
+      "pid": 51388,
       "type": "bat",
-      "bat_file": "C:\\Program Files\\Coding Projects\\Tearsheet Generator\\reboot_tkp_ts.bat"
+      "bat_file": "C:\\Coding Projects\\Tearsheet Generator\\reboot_tkp_ts.bat"
+    },
+    "TCP Tearsheet": {
+      "name": "TCP Tearsheet",
+      "pid": 50588,
+      "type": "bat",
+      "bat_file": "C:\\Coding Projects\\Tearsheet Generator\\reboot_tcp_ts.bat"
     },
     "Y&Q Tearsheet": {
       "name": "Y&Q Tearsheet",
-      "pid": 46736,
+      "pid": 3320,
       "type": "bat",
-      "bat_file": "C:\\Program Files\\Coding Projects\\Tearsheet Generator\\reboot_yq_ts.bat"
+      "bat_file": "C:\\Coding Projects\\Tearsheet Generator\\reboot_yq_ts.bat"
     },
     "Gold Maker": {
       "name": "Gold Maker",
-      "pid": 36488,
+      "pid": 70596,
       "type": "bat",
-      "bat_file": "C:\\Program Files\\Coding Projects\\Tearsheet Generator\\reboot_gold_maker.bat"
+      "bat_file": "C:\\Coding Projects\\Tearsheet Generator\\reboot_gold_maker.bat"
     },
     "Sector Ratio": {
       "name": "Sector Ratio",
-      "pid": 65456,
+      "pid": 68552,
       "type": "bat",
-      "bat_file": "C:\\Program Files\\Coding Projects\\GSR\\reboot_gsr.bat"
+      "bat_file": "C:\\Coding Projects\\GSR\\reboot_gsr.bat"
     },
     "ES Historical": {
       "name": "ES Historical",
-      "pid": 55676,
+      "pid": 69740,
       "type": "bat",
-      "bat_file": "C:\\Program Files\\Coding Projects\\ES Historical Data\\reboot_es_historical_data.bat"
+      "bat_file": "C:\\Coding Projects\\ES Historical Data\\reboot_es_historical_data.bat"
     },
     "Almanac Futures": {
       "name": "Almanac Futures",
-      "pid": 49696,
+      "pid": 29992,
       "type": "bat",
-      "bat_file": "C:\\Program Files\\Coding Projects\\Almanac Futures\\reboot_almanac.bat"
+      "bat_file": "C:\\Coding Projects\\Almanac Futures\\reboot_almanac.bat"
     },
     "Price Dashboard": {
       "name": "Price Dashboard",
-      "pid": 55976,
+      "pid": 70976,
       "type": "dash",
       "port": 8002,
       "url": "http://localhost:8002"
     },
     "Sector RRG": {
       "name": "Sector RRG",
-      "pid": 15900,
+      "pid": 58520,
       "type": "dash",
       "port": 8003,
       "url": "http://localhost:8003"
     },
     "Strategy Optimizer": {
       "name": "Strategy Optimizer",
-      "pid": 54068,
+      "pid": 67712,
       "type": "dash",
       "port": 8004,
       "url": "http://localhost:8004"
     },
     "Home Page": {
       "name": "Home Page",
-      "pid": 55032,
+      "pid": 44196,
       "type": "dash",
       "port": 8005,
       "url": "http://localhost:8005"
     },
     "Debug Page": {
       "name": "Debug Page",
-      "pid": 38604,
+      "pid": 24176,
       "type": "dash",
       "port": 8006,
       "url": "http://localhost:8006"
     },
+    "TWIFO Import Dropbox": {
+      "name": "TWIFO Import Dropbox",
+      "pid": 68604,
+      "type": "streamlit",
+      "port": 8009,
+      "url": "http://localhost:8009"
+    },
     "QuantLab Dashboard": {
       "name": "QuantLab Dashboard",
-      "pid": 38964,
+      "pid": 51628,
       "type": "streamlit",
       "port": 8501,
       "url": "http://localhost:8501"
     },
     "Agent Control Center": {
       "name": "Agent Control Center",
-      "pid": 71088,
+      "pid": 54620,
       "type": "fastapi",
       "port": 8007,
       "url": "http://localhost:8007"
     },
     "Trading Video Library": {
       "name": "Trading Video Library",
-      "pid": 60320,
+      "pid": 50332,
       "type": "docker-compose",
       "ports": [
         8000,
@@ -118,9 +131,23 @@
       },
       "url": "http://localhost:3003"
     },
+    "Summary Engine": {
+      "name": "Summary Engine",
+      "pid": 4716,
+      "type": "docker-compose",
+      "ports": [
+        8001,
+        3001
+      ],
+      "urls": {
+        "backend": "http://localhost:8001",
+        "frontend": "http://localhost:3001"
+      },
+      "url": "http://localhost:3001"
+    },
     "VizLab": {
       "name": "VizLab",
-      "pid": 43512,
+      "pid": 32240,
       "type": "nextjs",
       "port": 8011,
       "url": "http://localhost:8011"
