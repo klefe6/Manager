@@ -2,7 +2,7 @@
 """
 Purpose: Comprehensive Service Launcher
 Author: Kevin Lefebvre
-Last Updated: 2026-01-23
+Last Updated: 2026-02-10
 
 Launches all services including:
 - .bat file services
@@ -21,6 +21,7 @@ CRITICAL FIXES:
 3. Visible console windows for debugging
 4. Robust kill with process tree termination
 5. Proper health checks
+6. Optimized timeouts to prevent slow launches (Feb 2026)
 """
 
 import json
@@ -66,12 +67,13 @@ DAILY_RESTART_ENABLED = True  # Restart TKP Tearsheet every 24 hours
 # Timing configuration
 FAIL_THRESHOLD = 2  # Consecutive failures before restart
 CHECK_INTERVAL = 15  # Seconds between health checks
-LAUNCH_PAUSE = 3  # Seconds pause between launching each service
+LAUNCH_PAUSE = 1  # Seconds pause between launching each service (reduced for speed)
 DAILY_RESTART_INTERVAL = 24 * 60 * 60  # 24 hours in seconds
-BROWSER_OPEN_DELAY = 5  # Seconds to wait before opening browser
+BROWSER_OPEN_DELAY = 3  # Seconds to wait before opening browser (reduced for speed)
 
 # Service configuration
-TKP_SERVICE_NAME = "TKP Tearsheet"  # Service to restart daily
+# Services to include in the daily 24h restart loop (same update mechanism for both)
+DAILY_RESTART_SERVICES: List[str] = ["TKP Tearsheet", "TCP Tearsheet"]
 
 # Base directory
 BASE_DIR = Path(r"C:\Coding Projects")
@@ -79,6 +81,10 @@ BASE_DIR = Path(r"C:\Coding Projects")
 # ─────────────────────────────────────────────────────────────────────────────
 # SERVICE CONFIGURATIONS
 # ─────────────────────────────────────────────────────────────────────────────
+# Key services (must be started):
+#   - TCP Tearsheet (port 8078) — BAT_SERVICES
+#   - Summary website (port 3001) — DOCKER_COMPOSE_APPS["Summary Engine"] frontend
+#   - Filtered articles (port 8065) — BAT_SERVICES["TWIFO Sharing"]
 
 # .BAT Services
 BAT_SERVICES: Dict[str, Path] = {
@@ -92,6 +98,7 @@ BAT_SERVICES: Dict[str, Path] = {
     "Sector Ratio": BASE_DIR / "GSR" / "reboot_gsr.bat",
     "ES Historical": BASE_DIR / "ES Historical Data" / "reboot_es_historical_data.bat",
     "Almanac Futures": BASE_DIR / "Almanac Futures" / "reboot_almanac.bat",
+    "AGM Allocation": BASE_DIR / "AGM_Allocation" / "reboot_agm_allocation.bat",
 }
 
 # Dash Applications (ports 8002-8006)
@@ -220,6 +227,7 @@ PORTS: Dict[str, Tuple[str, int]] = {
     "Sector Ratio": ("127.0.0.1", 8080),
     "ES Historical": ("127.0.0.1", 8081),
     "Almanac Futures": ("127.0.0.1", 8072),
+    "AGM Allocation": ("127.0.0.1", 1001),
     "QuantLab Dashboard": ("127.0.0.1", 8501),
 }
 
@@ -240,6 +248,7 @@ CLOUDFLARE_DOMAINS: Dict[str, str] = {
     "Sector Ratio": "secratio.hcresearch.ltd",
     "ES Historical": "es-historical.hcresearch.ltd",
     "Almanac Futures": "almanac.hcresearch.ltd",
+    "AGM Allocation": "agm-allocation.hcresearch.ltd",
     "TS Generator": "ts-generator.hcresearch.ltd",
     "Agent Control Center": "agent-control.hcresearch.ltd",
     "Trading Video Library": "trading-video-library.hcresearch.ltd",
@@ -291,8 +300,10 @@ def is_service_healthy(host: str, port: int) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def launch_bat_service(name: str, bat_path: Path) -> Optional[subprocess.Popen]:
-    """Launch a .bat service with proper PID tracking."""
+def launch_bat_service(
+    name: str, bat_path: Path, diag: bool = False
+) -> Optional[subprocess.Popen]:
+    """Launch a .bat service with proper PID tracking. diag=True runs with output to log."""
     log_file = get_log_file(name)
 
     if not bat_path.exists():
@@ -302,7 +313,7 @@ def launch_bat_service(name: str, bat_path: Path) -> Optional[subprocess.Popen]:
             f.write(f"{datetime.now().isoformat()} - {error_msg}\n")
         return None
 
-    print(f"[LAUNCH] {name} → {bat_path.name}")
+    print(f"[LAUNCH] {name} → {bat_path.name}" + (" (diag mode)" if diag else ""))
 
     write_launch_log(
         log_file,
@@ -314,9 +325,24 @@ def launch_bat_service(name: str, bat_path: Path) -> Optional[subprocess.Popen]:
         },
     )
 
-    process = launch_bat_file(str(bat_path), name)
+    process = launch_bat_file(
+        str(bat_path), name, diag=diag, diag_log_path=str(log_file) if diag else None
+    )
 
     if process:
+        if diag:
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(f"Diag exit code: {process.returncode}\n")
+            print(f"[OK] {name} diag finished (exit code: {process.returncode}). Check log: {log_file}")
+            return process
+        time.sleep(1)
+        if process.poll() is not None:
+            with open(log_file, "a") as f:
+                f.write(f"ERROR: Process terminated immediately (exit code: {process.poll()})\n")
+            print(f"[ERROR] {name} terminated immediately (exit code: {process.poll()})")
+            print(f"[INFO] Check the console window for {name} for error details")
+            return None
+
         with open(log_file, "a") as f:
             f.write(f"Process started - PID: {process.pid}\n")
             f.write(
@@ -1006,10 +1032,31 @@ def launch_all_services() -> Tuple[Dict[str, subprocess.Popen], Dict[str, int]]:
 
     # Phase 1: Launch .bat services
     print("[PHASE 1] Launching .bat services...")
+    
+    # Define critical services that MUST bind to ports (wait for these)
+    CRITICAL_BAT_SERVICES = {"TWIFO Sharing", "TS Generator"}
+    
     for name, bat_path in BAT_SERVICES.items():
         process = launch_bat_service(name, bat_path)
         if process:
             all_services[name] = process
+            # Only wait for critical services with known ports
+            if name in CRITICAL_BAT_SERVICES and name in PORTS:
+                host, port = PORTS[name]
+                print(f"[INFO] Waiting for {name} to bind to port {port}...")
+                if wait_for_port(host, port, timeout=15):
+                    print(f"[OK] {name} is now listening on port {port}")
+                else:
+                    print(f"[WARN] {name} did not start listening on port {port} within 15s")
+                    failed_services.append(f"{name} (port not listening)")
+            elif name in PORTS:
+                # Non-critical services: just check once after a brief delay
+                host, port = PORTS[name]
+                time.sleep(2)
+                if is_port_listening(host, port, timeout=1.0):
+                    print(f"[OK] {name} is listening on port {port}")
+                else:
+                    print(f"[INFO] {name} may still be starting on port {port} (not waiting)")
         else:
             failed_services.append(name)
         time.sleep(LAUNCH_PAUSE)
@@ -1023,11 +1070,13 @@ def launch_all_services() -> Tuple[Dict[str, subprocess.Popen], Dict[str, int]]:
         if process:
             all_services[name] = process
             port = config["port"]
-            if wait_for_port("127.0.0.1", port, timeout=10):
+            # Dash apps typically start quickly
+            if wait_for_port("127.0.0.1", port, timeout=8):
                 print(f"[OK] {name} is now listening on port {port}")
             else:
-                print(f"[WARN] {name} did not start listening on port {port} within timeout")
-                failed_services.append(f"{name} (port not listening)")
+                print(f"[WARN] {name} did not start listening on port {port} within 8s")
+                print(f"[INFO] Check console window for {name} for errors")
+                # Don't mark as failed - service may still start
         else:
             failed_services.append(name)
         time.sleep(LAUNCH_PAUSE)
@@ -1068,13 +1117,14 @@ def launch_all_services() -> Tuple[Dict[str, subprocess.Popen], Dict[str, int]]:
         if process:
             all_services[name] = process
             port = config["port"]
-            if wait_for_port("127.0.0.1", port, timeout=30):
+            # FastAPI/Uvicorn starts quickly
+            if wait_for_port("127.0.0.1", port, timeout=10):
                 print(f"[OK] {name} is now listening on port {port}")
             else:
-                print(f"[WARN] {name} did not start listening on port {port} within timeout")
+                print(f"[WARN] {name} did not start listening on port {port} within 10s")
                 log_path = BASE_DIR / "Manager" / "logs" / f"{name.replace(' ', '_')}_launch.log"
                 print(f"[INFO] Check console window for errors or check log: {log_path}")
-                failed_services.append(f"{name} (port not listening)")
+                # Don't mark as failed - service may still be starting
         else:
             failed_services.append(name)
         time.sleep(LAUNCH_PAUSE)
@@ -1090,7 +1140,10 @@ def launch_all_services() -> Tuple[Dict[str, subprocess.Popen], Dict[str, int]]:
             print(f"[OK] {docker_info} - Ready for Docker Compose services")
         else:
             print(f"[ERROR] {docker_info}")
-            print(f"[WARN] Skipping {len(DOCKER_COMPOSE_APPS)} Docker Compose service(s)")
+            print(
+                f"[WARN] Skipping {len(DOCKER_COMPOSE_APPS)} Docker Compose service(s). "
+                "Summary Engine and Trading Video Library require Docker Desktop to be running."
+            )
             for name in DOCKER_COMPOSE_APPS.keys():
                 failed_services.append(f"{name} (Docker not available)")
             print()
@@ -1102,30 +1155,31 @@ def launch_all_services() -> Tuple[Dict[str, subprocess.Popen], Dict[str, int]]:
         if process:
             all_services[name] = process
             ports = config.get("ports", [])
-            print(f"[INFO] Waiting for {name} services to start (30-90 seconds for first build)...")
+            print(f"[INFO] Waiting for {name} services to start (15-45 seconds for first build)...")
+            # Give containers time to bind after docker compose up -d
+            time.sleep(5)
 
             backend_ports = [p for p in ports if 8000 <= p < 9000]
             frontend_ports = [p for p in ports if 3000 <= p < 4000]
 
             port_failed = False
+            # Reduced timeout for backend (API typically starts fast)
             for port in backend_ports:
-                if wait_for_port("127.0.0.1", port, timeout=90):
+                if wait_for_port("127.0.0.1", port, timeout=30):
                     print(f"[OK] {name} API is now listening on port {port}")
                 else:
-                    print(f"[WARN] {name} API did not start listening on port {port} within timeout")
-                    print(f"[WARN] Check Docker logs: docker compose -f {config['path']} logs")
-                    port_failed = True
+                    print(f"[WARN] {name} API did not start listening on port {port} within 30s")
+                    print(f"[INFO] Check Docker logs: docker compose -f {config['path']} logs")
+                    # Don't mark as failed immediately
 
+            # Frontend needs more time for build
             for port in frontend_ports:
-                if wait_for_port("127.0.0.1", port, timeout=60):
+                if wait_for_port("127.0.0.1", port, timeout=45):
                     print(f"[OK] {name} Frontend is now listening on port {port}")
                 else:
-                    print(f"[WARN] {name} Frontend did not start listening on port {port} within timeout")
-                    print(f"[WARN] Check Docker logs: docker compose -f {config['path']} logs")
-                    port_failed = True
-
-            if port_failed:
-                failed_services.append(f"{name} (ports not listening)")
+                    print(f"[WARN] {name} Frontend did not start listening on port {port} within 45s")
+                    print(f"[INFO] Check Docker logs: docker compose -f {config['path']} logs web")
+                    # Don't mark as failed - may still be building
         else:
             failed_services.append(name)
         time.sleep(LAUNCH_PAUSE)
@@ -1139,13 +1193,14 @@ def launch_all_services() -> Tuple[Dict[str, subprocess.Popen], Dict[str, int]]:
         if process:
             all_services[name] = process
             port = config["port"]
-            print(f"[INFO] Waiting for {name} to compile and start (20-30 seconds)...")
-            if wait_for_port("127.0.0.1", port, timeout=45):
+            print(f"[INFO] Waiting for {name} to compile and start (15-30 seconds)...")
+            # Next.js dev server with hot reload
+            if wait_for_port("127.0.0.1", port, timeout=30):
                 print(f"[OK] {name} is now listening on port {port}")
             else:
-                print(f"[WARN] {name} did not start listening on port {port} within timeout")
-                print(f"[WARN] Check the {name} console window for errors")
-                failed_services.append(f"{name} (port not listening)")
+                print(f"[WARN] {name} did not start listening on port {port} within 30s")
+                print(f"[INFO] Check the {name} console window - may still be compiling")
+                # Don't mark as failed
         else:
             failed_services.append(name)
         time.sleep(LAUNCH_PAUSE)
@@ -1184,10 +1239,36 @@ def launch_all_services() -> Tuple[Dict[str, subprocess.Popen], Dict[str, int]]:
         print(f"[WARN] Failed to launch: {len(failed_services)} service(s)")
         print(f"[WARN] Failed services: {', '.join(failed_services)}")
         print(f"[INFO] Check logs in: {BASE_DIR / 'Manager' / 'logs'}")
+        print(f"[INFO] Check console windows for real-time error messages")
     else:
         print(f"[OK] All services launched successfully")
     print(f"[INFO] Browser tabs opened for web services")
     print(f"[INFO] Services are running in background")
+    
+    # Verify which services are actually listening
+    print(f"\n[INFO] Verifying service ports...")
+    listening_services = []
+    not_listening_services = []
+    
+    for name in all_services.keys():
+        if name == "_tunnel_manager":
+            continue
+        if name in PORTS:
+            host, port = PORTS[name]
+            if is_port_listening(host, port, timeout=1.0):
+                listening_services.append((name, port))
+            else:
+                not_listening_services.append((name, port))
+    
+    if listening_services:
+        print(f"[OK] {len(listening_services)} service(s) confirmed listening:")
+        for name, port in listening_services:
+            print(f"  ✓ {name} (port {port})")
+    
+    if not_listening_services:
+        print(f"\n[WARN] {len(not_listening_services)} service(s) not yet listening:")
+        for name, port in not_listening_services:
+            print(f"  ✗ {name} (port {port}) - check console window for errors")
 
     # Print service URLs
     print(f"\n[INFO] Service URLs (Local):")
@@ -1262,7 +1343,7 @@ def main() -> None:
             if DAILY_RESTART_ENABLED:
                 now = time.time()
                 if now - last_daily_restart >= DAILY_RESTART_INTERVAL:
-                    print(f"\n[INFO] 24h elapsed — restarting {TKP_SERVICE_NAME}\n")
+                    print(f"\n[INFO] 24h elapsed — restarting: {', '.join(DAILY_RESTART_SERVICES)}\n")
                     last_daily_restart = now
 
     except KeyboardInterrupt:
@@ -1286,8 +1367,40 @@ def open_docker_desktop_gui() -> bool:
     return success
 
 
+def launch_only_bat(service_name: str, diag: bool = False) -> None:
+    """Launch a single BAT service by name (for quick testing). diag=True redirects to *_launch.log."""
+    if service_name not in BAT_SERVICES:
+        print(f"[ERROR] Unknown BAT service: {service_name}")
+        print(f"[INFO] Available: {', '.join(BAT_SERVICES.keys())}")
+        sys.exit(1)
+
+    bat_path = BAT_SERVICES[service_name]
+    print(f"\n[INFO] --only mode: launching '{service_name}' only" + (" (diag)" if diag else "") + "\n")
+    process = launch_bat_service(service_name, bat_path, diag=diag)
+    if process:
+        if diag:
+            log_file = get_log_file(service_name)
+            print(f"[INFO] Check log for CWD/dir/RUNNING/EXITCODE: {log_file}")
+            return
+        print(f"\n[OK] {service_name} launched (PID: {process.pid})")
+        if service_name in PORTS:
+            host, port = PORTS[service_name]
+            print(f"[INFO] Waiting for {service_name} to bind to port {port}...")
+            if wait_for_port(host, port, timeout=15):
+                print(f"[OK] {service_name} is listening on port {port}")
+            else:
+                print(f"[WARN] {service_name} not listening on port {port} within 15s")
+    else:
+        print(f"\n[ERROR] {service_name} failed to launch")
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--open-docker":
         open_docker_desktop_gui()
+        sys.exit(0)
+    if len(sys.argv) > 2 and sys.argv[1] == "--only":
+        diag = "--diag" in sys.argv
+        launch_only_bat(sys.argv[2], diag=diag)
         sys.exit(0)
     main()
