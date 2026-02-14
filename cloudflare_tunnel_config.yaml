@@ -97,6 +97,9 @@ ingress:
   - hostname: vizlab.hcresearch.ltd
     service: http://localhost:8011
   
+  # SriPNL / AMF (Dash - Port 7878)
+  - hostname: amf.hcresearch.ltd
+    service: http://localhost:7878
   
   # Catch-all (must be last)
   - service: http_status:404

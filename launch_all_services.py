@@ -62,13 +62,13 @@ except ImportError:
 
 # Feature flags
 HEALTH_CHECK_ENABLED = False  # Monitor & auto-restart unhealthy services
-DAILY_RESTART_ENABLED = True  # Restart TKP Tearsheet every 24 hours
+DAILY_RESTART_ENABLED = True  # Restart TKP/TCP Tearsheet every 24 hours
 
 # Timing configuration
 FAIL_THRESHOLD = 2  # Consecutive failures before restart
 CHECK_INTERVAL = 15  # Seconds between health checks
 LAUNCH_PAUSE = 1  # Seconds pause between launching each service (reduced for speed)
-DAILY_RESTART_INTERVAL = 24 * 60 * 60  # 24 hours in seconds
+DAILY_RESTART_INTERVAL = 24 * 60 * 60  # 24 hours in seconds (86400) - adjustable as needed
 BROWSER_OPEN_DELAY = 3  # Seconds to wait before opening browser (reduced for speed)
 
 # Service configuration
@@ -99,6 +99,7 @@ BAT_SERVICES: Dict[str, Path] = {
     "ES Historical": BASE_DIR / "ES Historical Data" / "reboot_es_historical_data.bat",
     "Almanac Futures": BASE_DIR / "Almanac Futures" / "reboot_almanac.bat",
     "AGM Allocation": BASE_DIR / "AGM_Allocation" / "reboot_agm_allocation.bat",
+    "CTA Outreach": BASE_DIR / "CTA" / "reboot_cta.bat",
 }
 
 # Dash Applications (ports 8002-8006)
@@ -138,6 +139,13 @@ DASH_APPS: Dict[str, Dict] = {
         "cwd": BASE_DIR / "HomePage",
         "venv": BASE_DIR / "HomePage" / ".venv13",
     },
+    "SriPNL": {
+        "path": BASE_DIR / "SriPNL" / "app.py",
+        "port": 7878,
+        "url": "http://localhost:7878",
+        "cwd": BASE_DIR / "SriPNL",
+        "venv": None,
+    },
 }
 
 # Streamlit Applications (fixed ports)
@@ -165,6 +173,20 @@ FASTAPI_APPS: Dict[str, Dict] = {
         "port": 8007,
         "url": "http://localhost:8007",
         "cwd": BASE_DIR / "Agent Control Center",
+        "venv": None,
+    },
+    "Order Flow Website Backend": {
+        "path": BASE_DIR / "Order Flow Website" / "backend" / "app" / "main.py",
+        "port": 8000,
+        "url": "http://localhost:8000",
+        "cwd": BASE_DIR / "Order Flow Website" / "backend",
+        "venv": BASE_DIR / "Order Flow Website" / "backend" / ".venv",
+    },
+    "CTA Outreach Backend": {
+        "path": BASE_DIR / "CTA" / "backend" / "app" / "main.py",
+        "port": 8010,
+        "url": "http://localhost:8010",
+        "cwd": BASE_DIR / "CTA" / "backend",
         "venv": None,
     },
 }
@@ -202,6 +224,20 @@ NEXTJS_APPS: Dict[str, Dict] = {
         "cwd": BASE_DIR / "VizLab",
         "command": "npm run dev",
     },
+    "Order Flow Website": {
+        "path": BASE_DIR / "Order Flow Website" / "frontend",
+        "port": 8012,
+        "url": "http://localhost:8012",
+        "cwd": BASE_DIR / "Order Flow Website" / "frontend",
+        "command": "npm run dev",
+    },
+    "CTA Outreach": {
+        "path": BASE_DIR / "CTA" / "frontend",
+        "port": 3004,
+        "url": "http://localhost:3004",
+        "cwd": BASE_DIR / "CTA" / "frontend",
+        "command": "npm run dev",
+    },
 }
 
 # Combined Port Map (for health checks)
@@ -210,15 +246,20 @@ PORTS: Dict[str, Tuple[str, int]] = {
     "TWIFO Import Dropbox": ("127.0.0.1", 8009),
     "Price Dashboard": ("127.0.0.1", 8002),
     "Sector RRG": ("127.0.0.1", 8003),
-    "Strategy Opt": ("127.0.0.1", 8004),
+    "Strategy Optimizer": ("127.0.0.1", 8004),
     "Home Page": ("127.0.0.1", 8005),
     "Debug Page": ("127.0.0.1", 8006),
     "Agent Control Center": ("127.0.0.1", 8007),
     "Trading Video Library API": ("127.0.0.1", 8000),
     "Trading Video Library": ("127.0.0.1", 3003),
+    "Summary Engine": ("127.0.0.1", 3001),
     "Summary Engine Backend": ("127.0.0.1", 8001),
     "Summary Engine Frontend": ("127.0.0.1", 3001),
     "VizLab": ("127.0.0.1", 8011),
+    "Order Flow Website Backend": ("127.0.0.1", 8000),
+    "Order Flow Website": ("127.0.0.1", 8012),
+    "CTA Outreach Backend": ("127.0.0.1", 8010),
+    "CTA Outreach": ("127.0.0.1", 3004),
     "TS Generator": ("127.0.0.1", 8077),
     "TKP Tearsheet": ("127.0.0.1", 8076),
     "TCP Tearsheet": ("127.0.0.1", 8078),
@@ -229,6 +270,7 @@ PORTS: Dict[str, Tuple[str, int]] = {
     "Almanac Futures": ("127.0.0.1", 8072),
     "AGM Allocation": ("127.0.0.1", 1001),
     "QuantLab Dashboard": ("127.0.0.1", 8501),
+    "SriPNL": ("127.0.0.1", 7878),
 }
 
 # Cloudflare domain mapping
@@ -254,6 +296,7 @@ CLOUDFLARE_DOMAINS: Dict[str, str] = {
     "Trading Video Library": "trading-video-library.hcresearch.ltd",
     "Summary Engine": "summary.hcresearch.ltd",
     "VizLab": "vizlab.hcresearch.ltd",
+    "SriPNL": "amf.hcresearch.ltd",
 }
 
 # Services to skip opening browser tabs
@@ -990,6 +1033,97 @@ def check_health(fail_counts: Dict[str, int]) -> List[str]:
     return to_restart
 
 
+def kill_process_tree(pid: int) -> bool:
+    """Kill a process and all its children using taskkill on Windows."""
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            capture_output=True,
+            timeout=10
+        )
+        return True
+    except Exception as e:
+        print(f"[ERROR] Failed to kill process {pid}: {e}")
+        return False
+
+
+def restart_services(
+    service_names: List[str],
+    all_services: Dict[str, subprocess.Popen],
+    fail_counts: Dict[str, int]
+) -> None:
+    """Restart specified services by killing and relaunching them."""
+    for name in service_names:
+        print(f"[INFO] Restarting {name}...")
+        
+        # Kill the existing process if it exists
+        if name in all_services:
+            process = all_services[name]
+            if process and process.poll() is None:  # Process is still running
+                print(f"[INFO] Killing {name} (PID: {process.pid})...")
+                if kill_process_tree(process.pid):
+                    print(f"[OK] Killed {name}")
+                    time.sleep(2)  # Wait for cleanup
+                else:
+                    print(f"[WARN] Failed to kill {name}, proceeding anyway...")
+            
+            # Remove from services dict
+            del all_services[name]
+        
+        # Reset fail count
+        if name in fail_counts:
+            fail_counts[name] = 0
+        
+        # Relaunch the service
+        if name in BAT_SERVICES:
+            bat_path = BAT_SERVICES[name]
+            process = launch_bat_service(name, bat_path)
+            if process:
+                all_services[name] = process
+                print(f"[OK] Relaunched {name} (PID: {process.pid})")
+                
+                # Wait for service to start if it has a known port
+                if name in PORTS:
+                    host, port = PORTS[name]
+                    print(f"[INFO] Waiting for {name} to bind to port {port}...")
+                    if wait_for_port(host, port, timeout=15):
+                        print(f"[OK] {name} is now listening on port {port}")
+                    else:
+                        print(f"[WARN] {name} did not start listening on port {port} within 15s")
+            else:
+                print(f"[ERROR] Failed to relaunch {name}")
+        
+        elif name in DASH_APPS:
+            config = DASH_APPS[name]
+            process = launch_dash_app(name, config)
+            if process:
+                all_services[name] = process
+                port = config["port"]
+                print(f"[OK] Relaunched {name} (PID: {process.pid})")
+                print(f"[INFO] Waiting for {name} to bind to port {port}...")
+                if wait_for_port("127.0.0.1", port, timeout=15):
+                    print(f"[OK] {name} is now listening on port {port}")
+                else:
+                    print(f"[WARN] {name} did not start listening on port {port} within 15s")
+            else:
+                print(f"[ERROR] Failed to relaunch {name}")
+        
+        elif name in STREAMLIT_APPS:
+            config = STREAMLIT_APPS[name]
+            process = launch_streamlit_app(name, config)
+            if process:
+                all_services[name] = process
+                port = config["port"]
+                print(f"[OK] Relaunched {name} (PID: {process.pid})")
+            else:
+                print(f"[ERROR] Failed to relaunch {name}")
+        
+        else:
+            print(f"[WARN] Unknown service type for {name}, cannot restart")
+        
+        time.sleep(LAUNCH_PAUSE)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN LAUNCHER
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1333,6 +1467,7 @@ def main() -> None:
                 to_restart = check_health(fail_counts)
                 if to_restart:
                     print(f"\n[WARN] Restarting failed services: {', '.join(to_restart)}\n")
+                    restart_services(to_restart, all_services, fail_counts)
                 else:
                     warnings = [n for n, c in fail_counts.items() if 0 < c < FAIL_THRESHOLD]
                     if warnings:
@@ -1344,6 +1479,7 @@ def main() -> None:
                 now = time.time()
                 if now - last_daily_restart >= DAILY_RESTART_INTERVAL:
                     print(f"\n[INFO] 24h elapsed — restarting: {', '.join(DAILY_RESTART_SERVICES)}\n")
+                    restart_services(DAILY_RESTART_SERVICES, all_services, fail_counts)
                     last_daily_restart = now
 
     except KeyboardInterrupt:
