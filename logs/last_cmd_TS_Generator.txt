@@ -1,0 +1,2 @@
+args=['cmd.exe', '/s', '/k', 'call run_tsgen.bat']
+cwd=C:\Coding Projects\Tearsheet Generator

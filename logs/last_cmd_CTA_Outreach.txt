@@ -1,0 +1,2 @@
+args=['cmd.exe', '/s', '/k', 'call reboot_cta.bat']
+cwd=C:\Coding Projects\CTA

@@ -1,0 +1,1 @@
+pushd "C:\Coding Projects\AGM_Allocation" && call "C:\Coding Projects\AGM_Allocation\reboot_agm_allocation.bat" && popd

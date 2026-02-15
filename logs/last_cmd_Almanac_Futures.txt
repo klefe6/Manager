@@ -1,0 +1,2 @@
+args=['cmd.exe', '/s', '/k', 'call reboot_almanac.bat']
+cwd=C:\Coding Projects\Almanac Futures

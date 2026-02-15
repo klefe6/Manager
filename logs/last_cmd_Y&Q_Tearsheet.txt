@@ -1,0 +1,2 @@
+args=['cmd.exe', '/s', '/k', 'call reboot_yq_ts.bat']
+cwd=C:\Coding Projects\Tearsheet Generator

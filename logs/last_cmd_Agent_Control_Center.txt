@@ -1,0 +1,2 @@
+args=['cmd.exe', '/s', '/k', 'call start_server.bat']
+cwd=C:\Coding Projects\Agent Control Center

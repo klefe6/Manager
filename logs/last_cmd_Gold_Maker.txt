@@ -1,0 +1,2 @@
+args=['cmd.exe', '/s', '/k', 'call reboot_gold_maker.bat']
+cwd=C:\Coding Projects\Tearsheet Generator

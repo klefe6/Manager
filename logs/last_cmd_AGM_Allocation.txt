@@ -1,0 +1,2 @@
+args=['cmd.exe', '/s', '/k', 'call reboot_agm_allocation.bat']
+cwd=C:\Coding Projects\AGM_Allocation

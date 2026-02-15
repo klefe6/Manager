@@ -164,45 +164,71 @@ def kill_process_by_port(port: int) -> Tuple[bool, List[int]]:
         return False, []
 
 
-def launch_bat_file(bat_path: str, service_name: str) -> Optional[subprocess.Popen]:
+def launch_bat_file(
+    bat_path: str,
+    service_name: str,
+    diag: bool = False,
+    diag_log_path: Optional[str] = None,
+) -> Optional[subprocess.Popen]:
     """
     Launch a .bat file in a NEW CONSOLE WINDOW with proper process tracking.
-    
-    CRITICAL: Uses CREATE_NEW_CONSOLE instead of 'start' command to maintain process handle.
-    
-    Args:
-        bat_path: Full path to .bat file
-        service_name: Name of service (for window title)
-        
-    Returns:
-        Popen object with handle to the actual process, or None on failure
+    Uses cwd=bat_dir and call bat_file only — no embedded quoted paths in the command.
+    When diag=True and diag_log_path is set, runs a diagnostic command and redirects
+    stdout+stderr to that log (no new window); use to see if failure is launcher vs inside bat.
     """
+    bat_path = str(Path(bat_path.strip().strip('"')).resolve())
+    bat_dir = os.path.dirname(bat_path)
+    bat_dir = str(Path(bat_dir.strip().strip('"')).resolve())
+    bat_file = os.path.basename(bat_path)
+
+    logger.info(f"bat_dir exists? {os.path.isdir(bat_dir)}")
+    logger.info(f"bat_path exists? {os.path.isfile(bat_path)}")
+
     if not os.path.exists(bat_path):
         logger.error(f".bat file not found: {bat_path}")
         return None
-    
-    bat_dir = os.path.dirname(bat_path)
-    bat_file = os.path.basename(bat_path)
-    
-    logger.info(f"Launching {service_name} from: {bat_path}")
-    
+
+    if diag and diag_log_path:
+        # Diagnostic: run in same process, redirect to service's *_launch.log
+        diag_cmd = f"echo CWD=%CD% & dir & echo RUNNING & call {bat_file} & echo EXITCODE=%ERRORLEVEL%"
+        cmd_args = ["cmd.exe", "/c", diag_cmd]
+        logger.info(f"diag mode: args={cmd_args}, cwd={bat_dir}, log={diag_log_path}")
+        try:
+            with open(diag_log_path, "a", encoding="utf-8") as log:
+                log.write(f"\n--- DIAG run at {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+                log.flush()
+                process = subprocess.Popen(
+                    cmd_args,
+                    cwd=bat_dir,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                )
+                process.wait()
+            logger.info(f"{service_name} diag finished (exit code: {process.returncode})")
+            return process
+        except Exception as e:
+            logger.error(f"Failed to run diag for {service_name}: {e}", exc_info=True)
+            return None
+
+    # Normal: new console window
+    cmd_args = ["cmd.exe", "/s", "/k", f"call {bat_file}"]
+    logger.info(f"final args: {cmd_args}, cwd: {bat_dir}")
+
+    _log_dir = Path(__file__).resolve().parent / "logs"
+    _log_dir.mkdir(parents=True, exist_ok=True)
+    _safe_name = service_name.replace(" ", "_")
+    (_log_dir / f"last_cmd_{_safe_name}.txt").write_text(
+        f"args={cmd_args}\ncwd={bat_dir}", encoding="utf-8"
+    )
+
     try:
-        # CRITICAL FIX: Use CREATE_NEW_CONSOLE + cmd.exe to open new window
-        # This keeps the process handle while showing output in a visible window
-        # Do NOT use 'start' command - it causes PID loss
-        
-        cmd_args = ["cmd.exe", "/k", bat_file]
-        
         process = subprocess.Popen(
             cmd_args,
             cwd=bat_dir,
-            creationflags=subprocess.CREATE_NEW_CONSOLE,  # Opens new console, keeps handle
-            # Do NOT use stdout/stderr=PIPE - causes buffer overflow and hangs
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
         )
-        
         logger.info(f"{service_name} launched successfully (PID: {process.pid})")
         return process
-        
     except Exception as e:
         logger.error(f"Failed to launch {service_name}: {e}", exc_info=True)
         return None
@@ -523,3 +549,51 @@ def kill_process_by_port_robust(port: int) -> Tuple[bool, List[int]]:
     else:
         logger.warning(f"Port {port} still in use after kill attempt")
         return len(killed_pids) > 0, killed_pids
+
+
+def debug_launch_one_bat(bat_path: str) -> Optional[subprocess.Popen]:
+    """
+    Debug helper: sanitize paths, print cmd_args, and launch a single .bat file.
+    Usage: python service_launcher_utils.py "C:\\path\\to\\file.bat"
+    """
+    bat_path = str(Path(bat_path.strip().strip('"')).resolve())
+    if not os.path.exists(bat_path):
+        print(f"[ERROR] .bat file not found: {bat_path}")
+        return None
+
+    bat_dir = os.path.dirname(bat_path)
+    bat_dir = str(Path(bat_dir.strip().strip('"')).resolve())
+
+    print("Sanitized paths:")
+    print(f"  bat_dir  = {bat_dir}")
+    print(f"  bat_path = {bat_path}")
+
+    cmdline = f'cmd.exe /s /k "pushd "{bat_dir}" && call "{bat_path}" && popd"'
+    print(f"cmdline (exact): {cmdline}")
+    last_cmd_file = Path(__file__).resolve().parent / "logs" / "last_cmd.txt"
+    last_cmd_file.parent.mkdir(parents=True, exist_ok=True)
+    last_cmd_file.write_text(cmdline, encoding="utf-8")
+    print(f"Wrote cmdline to {last_cmd_file}")
+
+    # Verify: no \" in cmdline
+    if '\\"' in cmdline:
+        print("[BUG] cmdline contains backslash-quote!")
+    else:
+        print("[OK] cmdline contains NO backslash-quote")
+
+    creationflags = subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0
+    process = subprocess.Popen(
+        cmdline,        # STRING, not list — bypasses list2cmdline
+        cwd=bat_dir,
+        creationflags=creationflags,
+    )
+    print(f"Launched PID: {process.pid}")
+    return process
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python service_launcher_utils.py <path_to_bat>")
+        print('Example: python service_launcher_utils.py "C:\\Coding Projects\\Tearsheet Generator\\reboot_tkp_ts.bat"')
+        sys.exit(1)
+    debug_launch_one_bat(sys.argv[1])
