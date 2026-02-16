@@ -269,9 +269,15 @@ BAT_SERVICES: Dict[str, Dict] = {
         "port": 1001,
         "python_exe": None,
     },
-    "CTA Outreach": {
-        "bat_path": BASE_DIR / "CTA" / "reboot_cta.bat",
-        "port": 3004,
+    # CTA Outreach: started via FASTAPI_APPS + NEXTJS_APPS below (not bat, to avoid duplicate launch)
+    "BTC Cycle Analysis": {
+        "bat_path": BASE_DIR / "BTCAnalysis" / "start_btc_analysis.bat",
+        "port": 5175,
+        "python_exe": None,
+    },
+    "BTC Macro Classes": {
+        "bat_path": BASE_DIR / "BTCClasses" / "start_btc_classes.bat",
+        "port": 5177,
         "python_exe": None,
     },
 }
@@ -378,10 +384,10 @@ FASTAPI_APPS: Dict[str, Dict] = {
     },
     "CTA Outreach Backend": {
         "script_path": BASE_DIR / "CTA" / "backend" / "app" / "main.py",
-        "port": 8010,
-        "url": "http://localhost:8010",
+        "port": 9000,
+        "url": "http://localhost:9000",
         "cwd": BASE_DIR / "CTA" / "backend",
-        "python_exe": r"C:\Python313\python.exe",
+        "python_exe": r"C:\Python310\python.exe",
         "uvicorn_module": "app.main:app",
     },
 }
@@ -424,8 +430,8 @@ NEXTJS_APPS: Dict[str, Dict] = {
     },
     "CTA Outreach": {
         "cwd": BASE_DIR / "CTA" / "frontend",
-        "port": 3004,
-        "url": "http://localhost:3004",
+        "port": 3000,
+        "url": "http://localhost:3000",
     },
 }
 
@@ -453,6 +459,8 @@ CLOUDFLARE_DOMAINS: Dict[str, str] = {
     "Summary Engine": "summary.hcresearch.ltd",
     "VizLab": "vizlab.hcresearch.ltd",
     "SriPNL": "amf.hcresearch.ltd",
+    "CTA Outreach": "ctaout.hcresearch.ltd",
+    "CTA Outreach Backend": "ctabackend.hcresearch.ltd",
 }
 
 # Services to skip opening browser tabs
