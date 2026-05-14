@@ -45,8 +45,10 @@ ingress:
   - hostname: quantlab.hcresearch.ltd
     service: http://localhost:8501
   
-  # TWIFO Sharing
+  # TWIFO Sharing / Filtered Articles
   - hostname: twifo.hcresearch.ltd
+    service: http://localhost:8065
+  - hostname: articles.hcresearch.ltd
     service: http://localhost:8065
   
   # TKP Tearsheet
@@ -60,6 +62,10 @@ ingress:
   # Y&Q Tearsheet
   - hostname: yq-ts.hcresearch.ltd
     service: http://localhost:8071
+  
+  # Momentum Pacer Tearsheet (Algominds)
+  - hostname: agm-ts.hcresearch.ltd
+    service: http://localhost:8079
   
   # Gold Maker
   - hostname: tgm-ts.hcresearch.ltd
