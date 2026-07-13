@@ -64,6 +64,13 @@ from service_config import (
     FASTAPI_APPS,
     DOCKER_COMPOSE_APPS,
     NEXTJS_APPS,
+    HEALTH_ONLINE,
+    HEALTH_PARTIAL,
+    HEALTH_OFFLINE,
+    HEALTH_UNKNOWN,
+    MANUAL_ONLY_PORTS,
+    classify_port_health,
+    service_health_ports,
     is_port_listening,
     wait_for_port,
     get_log_file,
@@ -88,12 +95,29 @@ except ImportError:
 running_processes: Dict[str, subprocess.Popen] = {}
 service_logs: Dict[str, Path] = {}
 
+# Final health verdict per service: online / partial / offline.
+# A multi-process service (Glenn Uploader) that comes up half-way lands in
+# "partial" and is reported as such in the launch summary, never as success.
+service_health_state: Dict[str, str] = {}
+
 # Service Dashboard (debug.py sites[]) display name -> launcher registry key(s).
 # Keys: BAT:, DASH:, STREAMLIT:, FASTAPI:, DOCKER:, NEXTJS: + name in service_config.
 DEBUG_SITE_LAUNCH_TARGETS: Dict[str, List[str]] = {
+    # Tearsheet cards are ROUTES on shared processes, not separate services:
+    # TKP Client/Admin are both tkp_ts.py on 8301, TCP Client/Admin are both
+    # tcp_ts_v2.py on 8302, and AGM Client/Admin/Portal are all mp_ts.py on 8304.
+    # That is why several cards legitimately map onto one launcher key.
+    "TKP Client": ["BAT:TKP Tearsheet"],
+    "TKP Admin": ["BAT:TKP Tearsheet"],
+    "TCP Client": ["BAT:TCP Tearsheet"],
+    "TCP Admin": ["BAT:TCP Tearsheet"],
+    "AGM Client": ["BAT:Momentum Pacer Tearsheet"],
+    "AGM Admin": ["BAT:Momentum Pacer Tearsheet"],
+    "AGM Portal": ["BAT:Momentum Pacer Tearsheet"],
+    "Y&Q Client": ["BAT:Y&Q Tearsheet"],
+    "Glenn Uploader": ["BAT:Glenn Uploader"],
     "AGM Allocation": ["BAT:AGM Allocation"],
     "AGM CO": ["BAT:AGM CO"],
-    "AGM Docs": ["BAT:AGM Docs"],
     "Agent Control Center": ["FASTAPI:Agent Control Center"],
     "Almanac": ["BAT:Almanac Futures"],
     "BTC Cycle Analysis": ["BAT:BTC Cycle Analysis"],
@@ -103,24 +127,16 @@ DEBUG_SITE_LAUNCH_TARGETS: Dict[str, List[str]] = {
     "CTA Outreach Backend": ["FASTAPI:CTA Outreach Backend"],
     "ES Options": ["BAT:ES Historical"],
     "Filtered Articles": ["BAT:TWIFO Sharing"],
+    "Gold Maker": ["BAT:Gold Maker"],
     "Homepage": ["DASH:Home Page"],
-    "Momentum Pacer Tearsheet": ["BAT:Momentum Pacer Tearsheet"],
-    "Order Flow Website": [
-        "NEXTJS:Order Flow Website",
-        "FASTAPI:Order Flow Website Backend",
-    ],
     "QuantLab Monitor": ["STREAMLIT:QuantLab Dashboard"],
     "Sector RRG": ["DASH:Sector RRG"],
     "Sector Ratio": ["BAT:Sector Ratio"],
-    "SriPNL": ["DASH:SriPNL"],
     "SR3 CVOL Monitor": ["BAT:SR3 CVOL Monitor"],
     "SR3 Dashboard": ["BAT:SR3 Dashboard"],
     "Strategy Optimizer": ["DASH:Strategy Optimizer"],
     "TGM Tearsheet": ["BAT:Gold Maker"],
-    "TCP Tearsheet": ["BAT:TCP Tearsheet"],
-    "TKP Tearsheet": ["BAT:TKP Tearsheet"],
     "VizLab": ["NEXTJS:VizLab"],
-    "Y&Q Tearsheet": ["BAT:Y&Q Tearsheet"],
 }
 
 
@@ -142,6 +158,64 @@ def get_pid_for_port(port: int) -> int:
     return 0
 
 
+def _wait_for_ports(
+    name: str,
+    process: subprocess.Popen,
+    ports: List[int],
+    timeout: float = 30.0,
+    early_exit_grace: float = 8.0,
+) -> Dict[int, bool]:
+    """
+    Wait until EVERY port in *ports* is listening. Returns the final
+    {port: is_listening} map, so the caller can tell full from partial startup.
+
+    Many bat wrappers (`cmd /c call file.bat`) running Flask/uvicorn with reloader
+    detach from cmd.exe quickly: the wrapper exits rc=1 in ~1s while the real
+    python server is still spinning up. So we DO NOT treat wrapper exit as
+    failure immediately.
+
+    Behavior:
+      - Returns as soon as all ports are listening.
+      - If the wrapper exits and NOTHING has bound within *early_exit_grace*
+        seconds, declare failure (the child died too).
+      - If the wrapper exits but SOME ports are up, keep waiting for the rest
+        until the deadline. Glenn's frontend (a cold Vite compile) routinely
+        binds long after its backend does.
+    """
+    deadline = time.time() + timeout
+    process_exit_time: Optional[float] = None
+    status: Dict[int, bool] = {p: False for p in ports}
+
+    if not ports:
+        return status
+
+    while time.time() < deadline:
+        for port in ports:
+            if not status[port]:
+                status[port] = is_port_listening("127.0.0.1", port, timeout=0.6)
+        if all(status.values()):
+            return status
+
+        rc = process.poll() if hasattr(process, "poll") else None
+        if rc is not None:
+            if process_exit_time is None:
+                process_exit_time = time.time()
+            elif (time.time() - process_exit_time) >= early_exit_grace:
+                for port in ports:
+                    if not status[port]:
+                        status[port] = is_port_listening("127.0.0.1", port, timeout=0.4)
+                if not any(status.values()):
+                    missing = ", ".join(str(p) for p in ports)
+                    print(
+                        f"[EARLY-EXIT] {name} wrapper exited rc={rc} and no port "
+                        f"({missing}) ever bound (grace {early_exit_grace:.0f}s exhausted)"
+                    )
+                    return status
+        time.sleep(0.5)
+
+    return status
+
+
 def _wait_for_port_or_exit(
     name: str,
     process: subprocess.Popen,
@@ -150,40 +224,12 @@ def _wait_for_port_or_exit(
     early_exit_grace: float = 8.0,
 ) -> bool:
     """
-    Wait for *port* to start listening, with smart early-exit handling.
+    Single-port wrapper kept for the Dash/Streamlit/FastAPI/Next launchers.
 
-    Many bat wrappers (`cmd /c call file.bat`) running Flask/uvicorn with reloader
-    detach from cmd.exe quickly: the wrapper exits rc=1 in ~1s while the real
-    python server is still spinning up. So we DO NOT treat wrapper exit as
-    failure immediately.
-
-    Behavior:
-      - Returns True the moment the port becomes listening.
-      - If the process exits AND port has not come up within *early_exit_grace*
-        seconds after that exit, declare failure (the python child also died).
-      - Otherwise wait the full *timeout* for the port.
-
-    Returns True iff the port is listening before timeout.
+    Behaviour is unchanged for them: all() over one port is just that port.
     """
-    deadline = time.time() + timeout
-    process_exit_time: Optional[float] = None
-    while time.time() < deadline:
-        if is_port_listening("127.0.0.1", port, timeout=0.6):
-            return True
-        rc = process.poll() if hasattr(process, "poll") else None
-        if rc is not None:
-            if process_exit_time is None:
-                process_exit_time = time.time()
-            elapsed_since_exit = time.time() - process_exit_time
-            if elapsed_since_exit >= early_exit_grace:
-                if not is_port_listening("127.0.0.1", port, timeout=0.4):
-                    print(
-                        f"[EARLY-EXIT] {name} wrapper exited rc={rc} and port {port} "
-                        f"never bound (grace {early_exit_grace:.0f}s exhausted)"
-                    )
-                    return False
-        time.sleep(0.5)
-    return False
+    status = _wait_for_ports(name, process, [port], timeout, early_exit_grace)
+    return all(status.values())
 
 
 def _launch_registry() -> Dict[str, Dict]:
@@ -248,10 +294,26 @@ def verify_dashboard_launch_coverage() -> Tuple[List[str], List[str]]:
         "BAT:Import Dropbox",
         "STREAMLIT:TWIFO Import Dropbox",
         "DASH:Price Dashboard",
+        "BAT:AGM Docs",
+        "DASH:SriPNL",
+        "FASTAPI:Order Flow Website Backend",
+        "NEXTJS:Order Flow Website",
+        "DOCKER:Summary Engine",
     }
     for key in extra:
         if key not in optional_extras:
             warnings.append(f"Launcher entry not on dashboard: {key}")
+
+    # The staff/admin tearsheet ports are manual-only by design. If one ever shows
+    # up in a launcher config it means someone wired an elevated, Access-gated
+    # surface into automatic sign-in startup - fail loudly rather than start it.
+    for key, cfg in reg.items():
+        for port in service_health_ports(cfg):
+            if port in MANUAL_ONLY_PORTS:
+                errors.append(
+                    f"{key}: port {port} is manual-only ({MANUAL_ONLY_PORTS[port]}) "
+                    f"and must not be auto-started"
+                )
 
     return errors, warnings
 
@@ -285,15 +347,45 @@ def _dash_apps_excluding_debug() -> Dict[str, Dict]:
     return {k: v for k, v in DASH_APPS.items() if k != "Debug Page"}
 
 
-def reuse_if_already_running(name: str, port: Optional[int]) -> Optional[ExistingServiceHandle]:
-    """Make repeated launcher runs idempotent by reusing occupied service ports."""
-    if not port:
+def reuse_if_already_running(
+    name: str,
+    ports: Optional[Any],
+) -> Optional[ExistingServiceHandle]:
+    """
+    Make repeated launcher runs idempotent by reusing fully-healthy services.
+
+    *ports* may be a single port (every existing caller) or a list of ports.
+
+    We only reuse when EVERY required port is listening. A half-up service is
+    deliberately NOT reused: falling through to a relaunch lets the service's own
+    launcher clean up the stale half (reboot_glenn_uploader.bat taskkills both
+    5173 and 8091 before starting), rather than leaving it wedged in partial.
+    """
+    if not ports:
         return None
-    if is_port_listening("127.0.0.1", port, timeout=1.0):
-        pid = get_pid_for_port(port)
+
+    port_list = [ports] if isinstance(ports, int) else [int(p) for p in ports]
+    if not port_list:
+        return None
+
+    status = {p: is_port_listening("127.0.0.1", p, timeout=1.0) for p in port_list}
+    state = classify_port_health(status)
+
+    if state == HEALTH_ONLINE:
+        pid = get_pid_for_port(port_list[0])
         pid_msg = f" (PID: {pid})" if pid else ""
-        print(f"[SKIP] {name} already running on port {port}{pid_msg}; reusing existing service")
+        listening = ", ".join(str(p) for p in port_list)
+        print(f"[SKIP] {name} already running on port(s) {listening}{pid_msg}; reusing existing service")
         return ExistingServiceHandle(pid)
+
+    if state == HEALTH_PARTIAL:
+        up = ", ".join(str(p) for p, ok in status.items() if ok)
+        down = ", ".join(str(p) for p, ok in status.items() if not ok)
+        print(
+            f"[PARTIAL] {name} is half-up (listening: {up} / not listening: {down}); "
+            f"relaunching so its launcher can reset the whole stack"
+        )
+
     return None
 
 
@@ -338,22 +430,25 @@ def launch_bat_service(name: str, config: Dict) -> Optional[subprocess.Popen]:
     """Launch a .bat service in a visible console window with descriptive title."""
     bat_path = config["bat_path"]
     port = config.get("port")
+    health_ports = service_health_ports(config)
     python_exe = config.get("python_exe")
     health_timeout = float(config.get("health_timeout", 60))
 
     if not bat_path.exists():
         error_msg = f"[ERROR] .bat not found for {name}: {bat_path}"
         print(error_msg)
+        service_health_state[name] = HEALTH_OFFLINE
         return None
 
-    existing = reuse_if_already_running(name, port)
+    existing = reuse_if_already_running(name, health_ports)
     if existing:
+        service_health_state[name] = HEALTH_ONLINE
         return existing
-    
+
     # If python_exe is specified, launch directly with Python instead of bat
     if python_exe and config.get("script_path"):
         return launch_python_service(name, config)
-    
+
     print(f"[LAUNCH] {name} (BAT) -> {bat_path.name}")
 
     log_file = get_log_file(name)
@@ -365,17 +460,43 @@ def launch_bat_service(name: str, config: Dict) -> Optional[subprocess.Popen]:
         process = _popen_new_window_bat(window_title, bat_path.name, str(bat_path.parent))
         print(f"[OK] {name} launched in new window (PID: {process.pid})")
 
-        if port:
-            print(f"[HEALTH] Waiting for {name} to bind to port {port} (timeout {health_timeout:.0f}s)...")
-            if _wait_for_port_or_exit(name, process, port, timeout=health_timeout):
-                print(f"[OK] {name} is now listening on port {port}")
-            else:
-                print(f"[WARN] {name} did not start listening on port {port} within {health_timeout:.0f}s")
+        if not health_ports:
+            service_health_state[name] = HEALTH_UNKNOWN
+            return process
+
+        listed = ", ".join(str(p) for p in health_ports)
+        print(
+            f"[HEALTH] Waiting for {name} to bind to port(s) {listed} "
+            f"(timeout {health_timeout:.0f}s)..."
+        )
+        status = _wait_for_ports(name, process, health_ports, timeout=health_timeout)
+        state = classify_port_health(status)
+        service_health_state[name] = state
+
+        # Always report every port individually, so a half-up stack is visible in
+        # the startup log rather than hidden behind a single OK.
+        for p in health_ports:
+            print(f"[HEALTH] {name} port {p}: {'LISTENING' if status[p] else 'NOT LISTENING'}")
+
+        if state == HEALTH_ONLINE:
+            print(f"[OK] {name} is fully up on port(s) {listed}")
+        elif state == HEALTH_PARTIAL:
+            down = ", ".join(str(p) for p, ok in status.items() if not ok)
+            print(
+                f"[PARTIAL] {name} started only partially - port(s) {down} never bound "
+                f"within {health_timeout:.0f}s. NOT a successful start."
+            )
+        else:
+            print(
+                f"[WARN] {name} did not start listening on port(s) {listed} "
+                f"within {health_timeout:.0f}s"
+            )
 
         return process
-        
+
     except Exception as e:
         print(f"[ERROR] Failed to launch {name}: {e}")
+        service_health_state[name] = HEALTH_OFFLINE
         return None
 
 
@@ -1032,12 +1153,26 @@ def launch_all_services() -> Tuple[Dict[str, subprocess.Popen], Dict[str, int]]:
     print("  LAUNCH SUMMARY")
     print("=" * 70)
     launched_count = len([k for k in all_services if k != "_tunnel_manager"])
-    print(f"\n[INFO] Successfully launched: {launched_count} services")
+    partial_services = sorted(
+        name for name, state in service_health_state.items() if state == HEALTH_PARTIAL
+    )
+    # A partial service is running, but it is NOT a success: report it separately
+    # so "launched N services" can never quietly cover a half-up stack.
+    fully_up = launched_count - len(partial_services)
+
+    print(f"\n[INFO] Successfully launched: {fully_up} services (fully healthy)")
+    if partial_services:
+        print(f"[PARTIAL] {len(partial_services)} service(s) came up only partially:")
+        for name in partial_services:
+            ports = service_health_ports(_launch_registry().get(f"BAT:{name}", {}))
+            detail = f" (requires ports {', '.join(str(p) for p in ports)})" if ports else ""
+            print(f"  [PARTIAL] {name}{detail}")
+        print(f"[PARTIAL] Treat these as FAILED starts - check logs in: {LOGS_DIR}")
     if failed_services:
         print(f"[WARN] Failed to launch: {len(failed_services)} service(s)")
         print(f"[WARN] Failed services: {', '.join(failed_services)}")
         print(f"[INFO] Check logs in: {LOGS_DIR}")
-    else:
+    if not failed_services and not partial_services:
         print(f"[OK] All launcher targets started successfully")
     if cov_errors:
         print(
