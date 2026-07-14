@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Service Configuration and Utilities
 Part of the Comprehensive Service Launcher system.
@@ -172,6 +172,65 @@ def run_preflight_check(service_name: str, python_exe: str, checks: List[Dict]) 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# SERVICE HEALTH MODEL
+# ─────────────────────────────────────────────────────────────────────────────
+
+# A service is only "online" when every port it needs is listening. Services made
+# of more than one process (Glenn Uploader = Vite frontend + FastAPI backend) can
+# sit in a half-up state, and that must never be reported as a successful start.
+HEALTH_ONLINE = "online"
+HEALTH_PARTIAL = "partial"
+HEALTH_OFFLINE = "offline"
+HEALTH_UNKNOWN = "unknown"
+
+
+def service_health_ports(config: Dict) -> List[int]:
+    """
+    Every port that must be listening for *config* to count as fully healthy.
+
+    Falls back to the single "port" key, so single-port services keep their exact
+    current behaviour: all() over one port is just that port.
+    """
+    ports = config.get("health_ports")
+    if ports:
+        return [int(p) for p in ports]
+    port = config.get("port")
+    return [int(port)] if port else []
+
+
+def classify_port_health(port_status: Dict[int, bool]) -> str:
+    """
+    Map {port: is_listening} onto online / partial / offline.
+
+    online  - every required port is listening
+    partial - at least one but not all (e.g. Glenn backend up, frontend dead)
+    offline - none are listening
+    """
+    states = list(port_status.values())
+    if not states:
+        return HEALTH_UNKNOWN
+    if all(states):
+        return HEALTH_ONLINE
+    if any(states):
+        return HEALTH_PARTIAL
+    return HEALTH_OFFLINE
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MANUAL-ONLY PORTS (deliberately excluded from automatic startup)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# The dedicated staff/admin tearsheet ports are brought up by hand only, via
+# reboot_tkp_staff.ps1 / reboot_tcp_staff.ps1 / reboot_mp_staff.ps1. They are
+# elevated, Cloudflare-Access-gated surfaces and must NOT start at sign-in.
+MANUAL_ONLY_PORTS: Dict[int, str] = {
+    8321: "TKP staff/admin - manual only (reboot_tkp_staff.ps1)",
+    8322: "TCP staff/admin - manual only (reboot_tcp_staff.ps1)",
+    8324: "AGM staff/admin - manual only (reboot_mp_staff.ps1)",
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SERVICE CONFIGURATIONS
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -221,10 +280,9 @@ BAT_SERVICES: Dict[str, Dict] = {
     },
     "Glenn Uploader": {
         # Full local stack: FastAPI backend on 8091 + Vite frontend on 5173.
-        # The bat kills both ports, then starts backend before frontend.
         "bat_path": BASE_DIR / "Tearsheet Generator" / "reboot_glenn_uploader.bat",
         "port": 5173,
-        "ports": [8091, 5173],
+        "health_ports": [8091, 5173],
         "python_exe": None,
         "health_timeout": 150,
         "capture_output": True,
@@ -479,4 +537,55 @@ CLOUDFLARE_DOMAINS: Dict[str, str] = {
 # Services to skip opening browser tabs
 SKIP_BROWSER_OPEN = {"Summary Engine Backend"}
 SKIP_PORTS = {8000, 8001}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STARTUP CONTRACT (source of truth shared with the Service Dashboard)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def export_startup_contract() -> Dict[str, object]:
+    """
+    Machine-readable projection of this file, written to startup_contract.json.
+
+    This exists so ports and launcher paths are declared in exactly ONE place.
+    HomePage/debug.py can read the generated JSON instead of re-declaring them.
+    """
+    services: Dict[str, Dict] = {}
+
+    def _add(kind: str, name: str, cfg: Dict) -> None:
+        artifact = cfg.get("bat_path") or cfg.get("script_path") or cfg.get("compose_file")
+        services[name] = {
+            "kind": kind,
+            "launcher": str(artifact) if artifact else None,
+            "port": cfg.get("port"),
+            "health_ports": service_health_ports(cfg),
+            "auto_start": True,
+        }
+
+    for name, cfg in BAT_SERVICES.items():
+        _add("bat", name, cfg)
+    for name, cfg in DASH_APPS.items():
+        _add("dash", name, cfg)
+    for name, cfg in STREAMLIT_APPS.items():
+        _add("streamlit", name, cfg)
+    for name, cfg in FASTAPI_APPS.items():
+        _add("fastapi", name, cfg)
+    for name, cfg in NEXTJS_APPS.items():
+        _add("nextjs", name, cfg)
+    for name, cfg in DOCKER_COMPOSE_APPS.items():
+        services[name] = {
+            "kind": "docker",
+            "launcher": str(cfg.get("compose_file")),
+            "port": None,
+            "health_ports": [int(p) for p in cfg.get("ports", [])],
+            "auto_start": True,
+        }
+
+    return {
+        "version": 1,
+        "generated_from": "Manager/service_config.py",
+        "services": services,
+        "manual_only_ports": {str(p): why for p, why in MANUAL_ONLY_PORTS.items()},
+    }
 

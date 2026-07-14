@@ -1,0 +1,317 @@
+{
+  "generated_from": "Manager/service_config.py",
+  "manual_only_ports": {
+    "8321": "TKP staff/admin - manual only (reboot_tkp_staff.ps1)",
+    "8322": "TCP staff/admin - manual only (reboot_tcp_staff.ps1)",
+    "8324": "AGM staff/admin - manual only (reboot_mp_staff.ps1)"
+  },
+  "services": {
+    "AGM Allocation": {
+      "auto_start": true,
+      "health_ports": [
+        8511
+      ],
+      "kind": "bat",
+      "launcher": "C:\\Coding Projects\\AGM_Allocation\\reboot_agm_allocation.bat",
+      "port": 8511
+    },
+    "AGM CO": {
+      "auto_start": true,
+      "health_ports": [
+        8512
+      ],
+      "kind": "bat",
+      "launcher": "C:\\Coding Projects\\AGM CO\\reboot_agm_co.bat",
+      "port": 8512
+    },
+    "AGM Docs": {
+      "auto_start": true,
+      "health_ports": [
+        8513
+      ],
+      "kind": "bat",
+      "launcher": "C:\\Coding Projects\\AGM Docs\\reboot_agm_docs.bat",
+      "port": 8513
+    },
+    "Agent Control Center": {
+      "auto_start": true,
+      "health_ports": [
+        8601
+      ],
+      "kind": "fastapi",
+      "launcher": "C:\\Coding Projects\\Agent Control Center\\main.py",
+      "port": 8601
+    },
+    "Almanac Futures": {
+      "auto_start": true,
+      "health_ports": [
+        8105
+      ],
+      "kind": "bat",
+      "launcher": "C:\\Coding Projects\\Almanac Futures\\reboot_almanac.bat",
+      "port": 8105
+    },
+    "BTC Cycle Analysis": {
+      "auto_start": true,
+      "health_ports": [
+        8801
+      ],
+      "kind": "bat",
+      "launcher": "C:\\Coding Projects\\BTCAnalysis\\start_btc_analysis.bat",
+      "port": 8801
+    },
+    "BTC Macro Classes": {
+      "auto_start": true,
+      "health_ports": [
+        8802
+      ],
+      "kind": "bat",
+      "launcher": "C:\\Coding Projects\\BTCClasses\\start_btc_classes.bat",
+      "port": 8802
+    },
+    "CTA Outreach": {
+      "auto_start": true,
+      "health_ports": [
+        8901
+      ],
+      "kind": "nextjs",
+      "launcher": null,
+      "port": 8901
+    },
+    "CTA Outreach Backend": {
+      "auto_start": true,
+      "health_ports": [
+        8902
+      ],
+      "kind": "fastapi",
+      "launcher": "C:\\Coding Projects\\CTA\\backend\\app\\main.py",
+      "port": 8902
+    },
+    "Debug Page": {
+      "auto_start": true,
+      "health_ports": [
+        8006
+      ],
+      "kind": "dash",
+      "launcher": "C:\\Coding Projects\\HomePage\\debug.py",
+      "port": 8006
+    },
+    "ES Historical": {
+      "auto_start": true,
+      "health_ports": [
+        8081
+      ],
+      "kind": "bat",
+      "launcher": "C:\\Coding Projects\\ES Historical Data\\reboot_es_historical_data.bat",
+      "port": 8081
+    },
+    "Glenn Uploader": {
+      "auto_start": true,
+      "health_ports": [
+        8091,
+        5173
+      ],
+      "kind": "bat",
+      "launcher": "C:\\Coding Projects\\Tearsheet Generator\\reboot_glenn_uploader.bat",
+      "port": 5173
+    },
+    "Gold Maker": {
+      "auto_start": true,
+      "health_ports": [
+        8075
+      ],
+      "kind": "bat",
+      "launcher": "C:\\Coding Projects\\Tearsheet Generator\\reboot_gold_maker.bat",
+      "port": 8075
+    },
+    "Home Page": {
+      "auto_start": true,
+      "health_ports": [
+        8005
+      ],
+      "kind": "dash",
+      "launcher": "C:\\Coding Projects\\HomePage\\main.py",
+      "port": 8005
+    },
+    "Import Dropbox": {
+      "auto_start": true,
+      "health_ports": [],
+      "kind": "bat",
+      "launcher": "C:\\Coding Projects\\TWIFO_Sharing\\reboot_import_dropbox.bat",
+      "port": null
+    },
+    "Momentum Pacer Tearsheet": {
+      "auto_start": true,
+      "health_ports": [
+        8304
+      ],
+      "kind": "bat",
+      "launcher": "C:\\Coding Projects\\Tearsheet Generator\\.worktrees\\live-deploy-main\\reboot_mp_ts.bat",
+      "port": 8304
+    },
+    "Order Flow Website": {
+      "auto_start": true,
+      "health_ports": [
+        8012
+      ],
+      "kind": "nextjs",
+      "launcher": null,
+      "port": 8012
+    },
+    "Order Flow Website Backend": {
+      "auto_start": true,
+      "health_ports": [
+        8000
+      ],
+      "kind": "fastapi",
+      "launcher": "C:\\Coding Projects\\Order Flow Website\\backend\\app\\main.py",
+      "port": 8000
+    },
+    "Price Dashboard": {
+      "auto_start": true,
+      "health_ports": [
+        8002
+      ],
+      "kind": "dash",
+      "launcher": "C:\\Coding Projects\\Price Dashboard\\app.py",
+      "port": 8002
+    },
+    "QuantLab Dashboard": {
+      "auto_start": true,
+      "health_ports": [
+        8103
+      ],
+      "kind": "streamlit",
+      "launcher": "C:\\Coding Projects\\QuantLab\\dashboard\\app.py",
+      "port": 8103
+    },
+    "SR3 CVOL Monitor": {
+      "auto_start": true,
+      "health_ports": [
+        8701
+      ],
+      "kind": "bat",
+      "launcher": "C:\\Coding Projects\\sr3_claude\\start_sr3_claude.bat",
+      "port": 8701
+    },
+    "SR3 Dashboard": {
+      "auto_start": true,
+      "health_ports": [
+        8702
+      ],
+      "kind": "bat",
+      "launcher": "C:\\Coding Projects\\CME-CVOL-IV-Rank-Monitor\\start_sr3_dashboard.bat",
+      "port": 8702
+    },
+    "Sector RRG": {
+      "auto_start": true,
+      "health_ports": [
+        8003
+      ],
+      "kind": "dash",
+      "launcher": "C:\\Coding Projects\\Sector\\app_rrg.py",
+      "port": 8003
+    },
+    "Sector Ratio": {
+      "auto_start": true,
+      "health_ports": [
+        8104
+      ],
+      "kind": "bat",
+      "launcher": "C:\\Coding Projects\\GSR\\reboot_gsr.bat",
+      "port": 8104
+    },
+    "SriPNL": {
+      "auto_start": true,
+      "health_ports": [
+        7878
+      ],
+      "kind": "dash",
+      "launcher": "C:\\Coding Projects\\SriPNL\\app.py",
+      "port": 7878
+    },
+    "Strategy Optimizer": {
+      "auto_start": true,
+      "health_ports": [
+        8004
+      ],
+      "kind": "dash",
+      "launcher": "C:\\Coding Projects\\StrategyOptimizer\\app.py",
+      "port": 8004
+    },
+    "Summary Engine": {
+      "auto_start": true,
+      "health_ports": [
+        8001,
+        3001
+      ],
+      "kind": "docker",
+      "launcher": "C:\\Coding Projects\\SummaryEngine\\docker-compose.yml",
+      "port": null
+    },
+    "TCP Tearsheet": {
+      "auto_start": true,
+      "health_ports": [
+        8302
+      ],
+      "kind": "bat",
+      "launcher": "C:\\Coding Projects\\Tearsheet Generator\\.worktrees\\live-deploy-main\\reboot_tcp_ts.bat",
+      "port": 8302
+    },
+    "TKP Tearsheet": {
+      "auto_start": true,
+      "health_ports": [
+        8301
+      ],
+      "kind": "bat",
+      "launcher": "C:\\Coding Projects\\Tearsheet Generator\\.worktrees\\live-deploy-main\\reboot_tkp_ts.bat",
+      "port": 8301
+    },
+    "TS Generator": {
+      "auto_start": true,
+      "health_ports": [
+        8077
+      ],
+      "kind": "bat",
+      "launcher": "C:\\Coding Projects\\Tearsheet Generator\\run_tsgen.bat",
+      "port": 8077
+    },
+    "TWIFO Import Dropbox": {
+      "auto_start": true,
+      "health_ports": [
+        8009
+      ],
+      "kind": "streamlit",
+      "launcher": "C:\\Coding Projects\\TWIFO_Sharing\\import_dropbox.py",
+      "port": 8009
+    },
+    "TWIFO Sharing": {
+      "auto_start": true,
+      "health_ports": [
+        8401
+      ],
+      "kind": "bat",
+      "launcher": "C:\\Coding Projects\\TWIFO_Sharing\\reboot_twifo.bat",
+      "port": 8401
+    },
+    "VizLab": {
+      "auto_start": true,
+      "health_ports": [
+        8110
+      ],
+      "kind": "nextjs",
+      "launcher": null,
+      "port": 8110
+    },
+    "Y&Q Tearsheet": {
+      "auto_start": true,
+      "health_ports": [
+        8303
+      ],
+      "kind": "bat",
+      "launcher": "C:\\Coding Projects\\Tearsheet Generator\\reboot_yq_ts.bat",
+      "port": 8303
+    }
+  },
+  "version": 1
+}

@@ -15,16 +15,22 @@ Launches all services including:
 
 Windows native, handles port conflicts gracefully.
 
-CRITICAL FEATURES (Feb 2026):
+CRITICAL FEATURES (May 2026):
 1. Per service python_exe enforcement (no PATH python)
 2. Preflight checks for dependencies (uvicorn, sqlalchemy, etc)
 3. Stdout and stderr piped to timestamped log files
 4. Health checks via port polling
-5. Early exit detection with last 50 lines of logs
-6. No PIPE buffer overflow, all processes use CREATE_NEW_CONSOLE or log files
+5. Smart early-exit detection with grace period (handles Flask reloader,
+   uvicorn --reload, and other self-detaching wrappers correctly)
+6. New visible console windows spawned via Windows `start "Title" cmd /k ...`
+   pattern instead of CREATE_NEW_CONSOLE — required for Flask debug-mode
+   services so the wrapper does not collapse before python binds the port
 7. Actual PID tracking, no wrapper PIDs
-8. Visible console windows for debugging
+8. Visible console windows for debugging (cmd /k keeps them readable)
 9. Robust kill with process tree termination
+10. Within each phase, services start in parallel (ThreadPoolExecutor)
+    when PARALLEL_LAUNCH_ENABLED is True
+11. Per-service `health_timeout` config so slow tearsheets get more wait
 """
 
 import json
@@ -33,10 +39,44 @@ import subprocess
 import sys
 import time
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-import socket
+from typing import Any, Callable, Dict, List, Optional, Tuple
+import psutil  # For memory monitoring
+
+# Import configuration and utilities
+from service_config import (
+    BASE_DIR,
+    LOGS_DIR,
+    HEALTH_CHECK_ENABLED,
+    DAILY_RESTART_ENABLED,
+    MEMORY_CHECK_ENABLED,
+    MEMORY_THRESHOLD_GB,
+    LAUNCH_PAUSE,
+    PHASE_PAUSE,
+    BROWSER_OPEN_DELAY,
+    PARALLEL_LAUNCH_ENABLED,
+    PARALLEL_MAX_WORKERS,
+    BAT_SERVICES,
+    DASH_APPS,
+    STREAMLIT_APPS,
+    FASTAPI_APPS,
+    DOCKER_COMPOSE_APPS,
+    NEXTJS_APPS,
+    HEALTH_ONLINE,
+    HEALTH_PARTIAL,
+    HEALTH_OFFLINE,
+    HEALTH_UNKNOWN,
+    MANUAL_ONLY_PORTS,
+    classify_port_health,
+    service_health_ports,
+    is_port_listening,
+    wait_for_port,
+    get_log_file,
+    read_last_lines,
+    run_preflight_check,
+)
 
 # Import Cloudflare Tunnel Manager
 try:
@@ -49,431 +89,336 @@ except ImportError:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CONFIGURATION
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Feature flags
-HEALTH_CHECK_ENABLED = False  # Monitor and auto restart unhealthy services
-DAILY_RESTART_ENABLED = True  # Restart TKP/TCP Tearsheet every 24 hours
-
-# Timing configuration
-FAIL_THRESHOLD = 2  # Consecutive failures before restart
-CHECK_INTERVAL = 15  # Seconds between health checks
-LAUNCH_PAUSE = 1  # Seconds pause between launching each service
-DAILY_RESTART_INTERVAL = 24 * 60 * 60  # 24 hours in seconds
-BROWSER_OPEN_DELAY = 3  # Seconds to wait before opening browser
-
-# Service configuration
-DAILY_RESTART_SERVICES: List[str] = ["TKP Tearsheet", "TCP Tearsheet"]
-
-# Base directory
-BASE_DIR = Path(r"C:\Coding Projects")
-
-# Logs directory
-LOGS_DIR = BASE_DIR / "Manager" / "logs"
-LOGS_DIR.mkdir(parents=True, exist_ok=True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# UTILITY FUNCTIONS
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def is_port_available(host: str, port: int, timeout: float = 1.0) -> bool:
-    """Check if a port is available (nothing listening on it)."""
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return False  # Port is in use
-    except (socket.error, ConnectionRefusedError, TimeoutError):
-        return True  # Port is available
-
-
-def is_port_listening(host: str, port: int, timeout: float = 2.0) -> bool:
-    """Check if something is listening on a port."""
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True  # Something is listening
-    except (socket.error, ConnectionRefusedError, TimeoutError):
-        return False  # Nothing listening
-
-
-def wait_for_port(host: str, port: int, timeout: float = 30.0, check_interval: float = 0.5) -> bool:
-    """Wait for a port to start listening."""
-    start_time = time.time()
-    
-    while (time.time() - start_time) < timeout:
-        if is_port_listening(host, port, timeout=1.0):
-            return True
-        time.sleep(check_interval)
-    
-    return False
-
-
-def get_log_file(service_name: str) -> Path:
-    """Get log file path for a service."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return LOGS_DIR / f"{service_name.replace(' ', '_')}_{timestamp}.log"
-
-
-def read_last_lines(file_path: Path, num_lines: int = 50) -> str:
-    """Read last N lines from a file."""
-    try:
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            lines = f.readlines()
-            return ''.join(lines[-num_lines:])
-    except Exception as e:
-        return f"Could not read log file: {e}"
-
-
-def kill_process_tree(pid: int) -> bool:
-    """Kill a process and all its children using taskkill on Windows."""
-    try:
-        subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(pid)],
-            capture_output=True,
-            timeout=10
-        )
-        return True
-    except Exception as e:
-        print(f"[ERROR] Failed to kill process {pid}: {e}")
-        return False
-
-
-def run_preflight_check(service_name: str, python_exe: str, checks: List[Dict]) -> Tuple[bool, str]:
-    """
-    Run preflight checks for a service.
-    
-    Args:
-        service_name: Name of the service
-        python_exe: Absolute path to Python executable
-        checks: List of check definitions with 'command' and 'expected' keys
-        
-    Returns:
-        Tuple of (success, message)
-    """
-    if not os.path.exists(python_exe):
-        return False, f"Python executable not found: {python_exe}"
-    
-    print(f"[PREFLIGHT] {service_name} using {python_exe}")
-    
-    for check in checks:
-        cmd = [python_exe, "-c", check["command"]]
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            
-            if result.returncode != 0:
-                return False, f"Check failed: {check.get('description', 'unknown')}\nError: {result.stderr}"
-            
-            output = result.stdout.strip()
-            print(f"  Check: {check.get('description', 'unknown')}")
-            print(f"    Output: {output}")
-            
-            # Verify expected output if specified
-            if "expected" in check:
-                if check["expected"] not in output:
-                    remediation = check.get("remediation", "No remediation steps provided")
-                    return False, f"Check failed: {check.get('description', 'unknown')}\n{remediation}"
-        
-        except subprocess.TimeoutExpired:
-            return False, f"Check timed out: {check.get('description', 'unknown')}"
-        except Exception as e:
-            return False, f"Check error: {check.get('description', 'unknown')}: {e}"
-    
-    print(f"[PREFLIGHT] {service_name} passed all checks")
-    return True, "OK"
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SERVICE CONFIGURATIONS
-# ─────────────────────────────────────────────────────────────────────────────
-
-# .BAT Services
-BAT_SERVICES: Dict[str, Dict] = {
-    "TWIFO Sharing": {
-        "bat_path": BASE_DIR / "TWIFO_Sharing" / "reboot_twifo.bat",
-        "port": 8065,
-        "python_exe": None,  # Uses bat file internal python
-    },
-    "Import Dropbox": {
-        "bat_path": BASE_DIR / "TWIFO_Sharing" / "reboot_import_dropbox.bat",
-        "port": None,
-        "python_exe": None,
-    },
-    "TS Generator": {
-        "bat_path": BASE_DIR / "Tearsheet Generator" / "run_tsgen.bat",
-        "port": 8077,
-        "python_exe": None,
-    },
-    "TKP Tearsheet": {
-        "bat_path": BASE_DIR / "Tearsheet Generator" / "reboot_tkp_ts.bat",
-        "port": 8076,
-        "python_exe": None,
-    },
-    "TCP Tearsheet": {
-        "bat_path": BASE_DIR / "Tearsheet Generator" / "reboot_tcp_ts.bat",
-        "port": 8078,
-        "python_exe": None,
-    },
-    "Y&Q Tearsheet": {
-        "bat_path": BASE_DIR / "Tearsheet Generator" / "reboot_yq_ts.bat",
-        "port": 8071,
-        "python_exe": None,
-    },
-    "Gold Maker": {
-        "bat_path": BASE_DIR / "Tearsheet Generator" / "reboot_gold_maker.bat",
-        "port": 8075,
-        "python_exe": None,
-    },
-    "Sector Ratio": {
-        "bat_path": BASE_DIR / "GSR" / "reboot_gsr.bat",
-        "port": 8080,
-        "python_exe": None,
-    },
-    "ES Historical": {
-        "bat_path": BASE_DIR / "ES Historical Data" / "reboot_es_historical_data.bat",
-        "port": 8081,
-        "python_exe": None,
-    },
-    "Almanac Futures": {
-        "bat_path": BASE_DIR / "Almanac Futures" / "reboot_almanac.bat",
-        "port": 8072,
-        "python_exe": BASE_DIR / "Almanac Futures" / ".venv312" / "Scripts" / "python.exe",
-        "script_path": BASE_DIR / "Almanac Futures" / "runalmanac.py",
-        "cwd": BASE_DIR / "Almanac Futures",
-        "preflight_checks": [
-            {
-                "command": "import sys; print(sys.version)",
-                "description": "Python version check",
-            },
-            {
-                "command": "import sys; print('OK' if (3, 11) <= sys.version_info < (3, 13) else 'FAIL')",
-                "expected": "OK",
-                "description": "Python version is 3.11 or 3.12",
-                "remediation": "Create venv with Python 3.11 or 3.12: python3.12 -m venv .venv312"
-            },
-            {
-                "command": "import sqlalchemy; print('OK')",
-                "expected": "OK",
-                "description": "SQLAlchemy import check",
-                "remediation": "Install SQLAlchemy: .venv312\\Scripts\\python.exe -m pip install sqlalchemy"
-            },
-        ],
-    },
-    "AGM Allocation": {
-        "bat_path": BASE_DIR / "AGM_Allocation" / "reboot_agm_allocation.bat",
-        "port": 1001,
-        "python_exe": None,
-    },
-    # CTA Outreach: started via FASTAPI_APPS + NEXTJS_APPS below (not bat, to avoid duplicate launch)
-    "BTC Cycle Analysis": {
-        "bat_path": BASE_DIR / "BTCAnalysis" / "start_btc_analysis.bat",
-        "port": 5175,
-        "python_exe": None,
-    },
-    "BTC Macro Classes": {
-        "bat_path": BASE_DIR / "BTCClasses" / "start_btc_classes.bat",
-        "port": 5177,
-        "python_exe": None,
-    },
-}
-
-# Dash Applications
-DASH_APPS: Dict[str, Dict] = {
-    "Price Dashboard": {
-        "script_path": BASE_DIR / "Price Dashboard" / "app.py",
-        "port": 8002,
-        "url": "http://localhost:8002",
-        "cwd": BASE_DIR / "Price Dashboard",
-        "python_exe": r"C:\Python313\python.exe",
-    },
-    "Sector RRG": {
-        "script_path": BASE_DIR / "Sector" / "app_rrg.py",
-        "port": 8003,
-        "url": "http://localhost:8003",
-        "cwd": BASE_DIR / "Sector",
-        "python_exe": r"C:\Python313\python.exe",
-    },
-    "Strategy Optimizer": {
-        "script_path": BASE_DIR / "StrategyOptimizer" / "app.py",
-        "port": 8004,
-        "url": "http://localhost:8004",
-        "cwd": BASE_DIR / "StrategyOptimizer",
-        "python_exe": BASE_DIR / "StrategyOptimizer" / ".venv13" / "Scripts" / "python.exe",
-    },
-    "Home Page": {
-        "script_path": BASE_DIR / "HomePage" / "main.py",
-        "port": 8005,
-        "url": "http://localhost:8005",
-        "cwd": BASE_DIR / "HomePage",
-        "python_exe": BASE_DIR / "HomePage" / ".venv13" / "Scripts" / "python.exe",
-    },
-    "Debug Page": {
-        "script_path": BASE_DIR / "HomePage" / "debug.py",
-        "port": 8006,
-        "url": "http://localhost:8006",
-        "cwd": BASE_DIR / "HomePage",
-        "python_exe": BASE_DIR / "HomePage" / ".venv13" / "Scripts" / "python.exe",
-    },
-    "SriPNL": {
-        "script_path": BASE_DIR / "SriPNL" / "app.py",
-        "port": 7878,
-        "url": "http://localhost:7878",
-        "cwd": BASE_DIR / "SriPNL",
-        "python_exe": r"C:\Python313\python.exe",
-    },
-}
-
-# Streamlit Applications
-STREAMLIT_APPS: Dict[str, Dict] = {
-    "TWIFO Import Dropbox": {
-        "script_path": BASE_DIR / "TWIFO_Sharing" / "import_dropbox.py",
-        "port": 8009,
-        "url": "http://localhost:8009",
-        "cwd": BASE_DIR / "TWIFO_Sharing",
-        "python_exe": BASE_DIR / "TWIFO_Sharing" / ".venv13" / "Scripts" / "python.exe",
-    },
-    "QuantLab Dashboard": {
-        "script_path": BASE_DIR / "QuantLab" / "dashboard" / "app.py",
-        "port": 8501,
-        "url": "http://localhost:8501",
-        "cwd": BASE_DIR / "QuantLab",
-        "python_exe": r"C:\Python313\python.exe",
-    },
-}
-
-# FastAPI Applications
-FASTAPI_APPS: Dict[str, Dict] = {
-    "Agent Control Center": {
-        "script_path": BASE_DIR / "Agent Control Center" / "main.py",
-        "port": 8007,
-        "url": "http://localhost:8007",
-        "cwd": BASE_DIR / "Agent Control Center",
-        "python_exe": BASE_DIR / "Agent Control Center" / ".venv312" / "Scripts" / "python.exe",
-        "uvicorn_module": "main:app",
-        "preflight_checks": [
-            {
-                "command": "import sys; print(sys.executable)",
-                "description": "Python executable path",
-            },
-            {
-                "command": "import pkgutil; print('uvicorn' in [m.name for m in pkgutil.iter_modules()])",
-                "expected": "True",
-                "description": "uvicorn module check",
-                "remediation": "Install uvicorn and fastapi:\n  .venv312\\Scripts\\python.exe -m pip install uvicorn fastapi"
-            },
-            {
-                "command": "import pkgutil; print('fastapi' in [m.name for m in pkgutil.iter_modules()])",
-                "expected": "True",
-                "description": "fastapi module check",
-                "remediation": "Install fastapi:\n  .venv312\\Scripts\\python.exe -m pip install fastapi"
-            },
-        ],
-    },
-    "Order Flow Website Backend": {
-        "script_path": BASE_DIR / "Order Flow Website" / "backend" / "app" / "main.py",
-        "port": 8000,
-        "url": "http://localhost:8000",
-        "cwd": BASE_DIR / "Order Flow Website" / "backend",
-        "python_exe": BASE_DIR / "Order Flow Website" / "backend" / ".venv" / "Scripts" / "python.exe",
-        "uvicorn_module": "app.main:app",
-    },
-    "CTA Outreach Backend": {
-        "script_path": BASE_DIR / "CTA" / "backend" / "app" / "main.py",
-        "port": 9000,
-        "url": "http://localhost:9000",
-        "cwd": BASE_DIR / "CTA" / "backend",
-        "python_exe": r"C:\Python310\python.exe",
-        "uvicorn_module": "app.main:app",
-    },
-}
-
-# Docker Compose Applications
-DOCKER_COMPOSE_APPS: Dict[str, Dict] = {
-    "Trading Video Library": {
-        "compose_file": BASE_DIR / "Trading Video Library" / "docker-compose.yml",
-        "ports": [8000, 3003],
-        "urls": {
-            "backend": "http://localhost:8000",
-            "frontend": "http://localhost:3003",
-        },
-        "cwd": BASE_DIR / "Trading Video Library",
-        "services": ["api", "worker", "redis", "web"],
-    },
-    "Summary Engine": {
-        "compose_file": BASE_DIR / "SummaryEngine" / "docker-compose.yml",
-        "ports": [8001, 3001],
-        "urls": {
-            "backend": "http://localhost:8001",
-            "frontend": "http://localhost:3001",
-        },
-        "cwd": BASE_DIR / "SummaryEngine",
-        "services": ["backend", "frontend"],
-    },
-}
-
-# Next.js Applications
-NEXTJS_APPS: Dict[str, Dict] = {
-    "VizLab": {
-        "cwd": BASE_DIR / "VizLab",
-        "port": 8011,
-        "url": "http://localhost:8011",
-    },
-    "Order Flow Website": {
-        "cwd": BASE_DIR / "Order Flow Website" / "frontend",
-        "port": 8012,
-        "url": "http://localhost:8012",
-    },
-    "CTA Outreach": {
-        "cwd": BASE_DIR / "CTA" / "frontend",
-        "port": 3000,
-        "url": "http://localhost:3000",
-    },
-}
-
-# Cloudflare domain mapping
-CLOUDFLARE_DOMAINS: Dict[str, str] = {
-    "Price Dashboard": "price-dashboard.hcresearch.ltd",
-    "Sector RRG": "sector-rrg.hcresearch.ltd",
-    "Strategy Optimizer": "strategy-optimizer.hcresearch.ltd",
-    "Home Page": "homepage.hcresearch.ltd",
-    "Debug Page": "debug.hcresearch.ltd",
-    "QuantLab Dashboard": "quantlab.hcresearch.ltd",
-    "TWIFO Import Dropbox": "import-dropbox.hcresearch.ltd",
-    "TWIFO Sharing": "twifo.hcresearch.ltd",
-    "TKP Tearsheet": "tkp-ts.hcresearch.ltd",
-    "TCP Tearsheet": "tcp-ts.hcresearch.ltd",
-    "Y&Q Tearsheet": "yq-ts.hcresearch.ltd",
-    "Gold Maker": "tgm-ts.hcresearch.ltd",
-    "Sector Ratio": "secratio.hcresearch.ltd",
-    "ES Historical": "es-historical.hcresearch.ltd",
-    "Almanac Futures": "almanac.hcresearch.ltd",
-    "AGM Allocation": "agm-allocation.hcresearch.ltd",
-    "TS Generator": "ts-generator.hcresearch.ltd",
-    "Agent Control Center": "agent-control.hcresearch.ltd",
-    "Trading Video Library": "trading-video-library.hcresearch.ltd",
-    "Summary Engine": "summary.hcresearch.ltd",
-    "VizLab": "vizlab.hcresearch.ltd",
-    "SriPNL": "amf.hcresearch.ltd",
-    "CTA Outreach": "ctaout.hcresearch.ltd",
-    "CTA Outreach Backend": "ctabackend.hcresearch.ltd",
-}
-
-# Services to skip opening browser tabs
-SKIP_BROWSER_OPEN = {"Summary Engine Backend"}
-SKIP_PORTS = {8000, 8001}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # GLOBAL STATE
 # ─────────────────────────────────────────────────────────────────────────────
 
 running_processes: Dict[str, subprocess.Popen] = {}
 service_logs: Dict[str, Path] = {}
+
+# Final health verdict per service: online / partial / offline.
+# A multi-process service (Glenn Uploader) that comes up half-way lands in
+# "partial" and is reported as such in the launch summary, never as success.
+service_health_state: Dict[str, str] = {}
+
+# Service Dashboard (debug.py sites[]) display name -> launcher registry key(s).
+# Keys: BAT:, DASH:, STREAMLIT:, FASTAPI:, DOCKER:, NEXTJS: + name in service_config.
+DEBUG_SITE_LAUNCH_TARGETS: Dict[str, List[str]] = {
+    # Tearsheet cards are ROUTES on shared processes, not separate services:
+    # TKP Client/Admin are both tkp_ts.py on 8301, TCP Client/Admin are both
+    # tcp_ts_v2.py on 8302, and AGM Client/Admin/Portal are all mp_ts.py on 8304.
+    # That is why several cards legitimately map onto one launcher key.
+    "TKP Client": ["BAT:TKP Tearsheet"],
+    "TKP Admin": ["BAT:TKP Tearsheet"],
+    "TCP Client": ["BAT:TCP Tearsheet"],
+    "TCP Admin": ["BAT:TCP Tearsheet"],
+    "AGM Client": ["BAT:Momentum Pacer Tearsheet"],
+    "AGM Admin": ["BAT:Momentum Pacer Tearsheet"],
+    "AGM Portal": ["BAT:Momentum Pacer Tearsheet"],
+    "Y&Q Client": ["BAT:Y&Q Tearsheet"],
+    "Glenn Uploader": ["BAT:Glenn Uploader"],
+    "AGM Allocation": ["BAT:AGM Allocation"],
+    "AGM CO": ["BAT:AGM CO"],
+    "Agent Control Center": ["FASTAPI:Agent Control Center"],
+    "Almanac": ["BAT:Almanac Futures"],
+    "BTC Cycle Analysis": ["BAT:BTC Cycle Analysis"],
+    "BTC Macro Classes": ["BAT:BTC Macro Classes"],
+    "Compare Tearsheets": ["BAT:TS Generator"],
+    "CTA Outreach": ["NEXTJS:CTA Outreach"],
+    "CTA Outreach Backend": ["FASTAPI:CTA Outreach Backend"],
+    "ES Options": ["BAT:ES Historical"],
+    "Filtered Articles": ["BAT:TWIFO Sharing"],
+    "Gold Maker": ["BAT:Gold Maker"],
+    "Homepage": ["DASH:Home Page"],
+    "QuantLab Monitor": ["STREAMLIT:QuantLab Dashboard"],
+    "Sector RRG": ["DASH:Sector RRG"],
+    "Sector Ratio": ["BAT:Sector Ratio"],
+    "SR3 CVOL Monitor": ["BAT:SR3 CVOL Monitor"],
+    "SR3 Dashboard": ["BAT:SR3 Dashboard"],
+    "Strategy Optimizer": ["DASH:Strategy Optimizer"],
+    "TGM Tearsheet": ["BAT:Gold Maker"],
+    "VizLab": ["NEXTJS:VizLab"],
+}
+
+
+class ExistingServiceHandle:
+    """Small process-like handle for a service that is already listening."""
+
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+
+
+def get_pid_for_port(port: int) -> int:
+    """Return the first PID listening on a local port, or 0 if unavailable."""
+    try:
+        for conn in psutil.net_connections(kind="inet"):
+            if conn.status == psutil.CONN_LISTEN and conn.laddr and conn.laddr.port == port:
+                return int(conn.pid or 0)
+    except Exception:
+        return 0
+    return 0
+
+
+def _wait_for_ports(
+    name: str,
+    process: subprocess.Popen,
+    ports: List[int],
+    timeout: float = 30.0,
+    early_exit_grace: float = 8.0,
+) -> Dict[int, bool]:
+    """
+    Wait until EVERY port in *ports* is listening. Returns the final
+    {port: is_listening} map, so the caller can tell full from partial startup.
+
+    Many bat wrappers (`cmd /c call file.bat`) running Flask/uvicorn with reloader
+    detach from cmd.exe quickly: the wrapper exits rc=1 in ~1s while the real
+    python server is still spinning up. So we DO NOT treat wrapper exit as
+    failure immediately.
+
+    Behavior:
+      - Returns as soon as all ports are listening.
+      - If the wrapper exits and NOTHING has bound within *early_exit_grace*
+        seconds, declare failure (the child died too).
+      - If the wrapper exits but SOME ports are up, keep waiting for the rest
+        until the deadline. Glenn's frontend (a cold Vite compile) routinely
+        binds long after its backend does.
+    """
+    deadline = time.time() + timeout
+    process_exit_time: Optional[float] = None
+    status: Dict[int, bool] = {p: False for p in ports}
+
+    if not ports:
+        return status
+
+    while time.time() < deadline:
+        for port in ports:
+            if not status[port]:
+                status[port] = is_port_listening("127.0.0.1", port, timeout=0.6)
+        if all(status.values()):
+            return status
+
+        rc = process.poll() if hasattr(process, "poll") else None
+        if rc is not None:
+            if process_exit_time is None:
+                process_exit_time = time.time()
+            elif (time.time() - process_exit_time) >= early_exit_grace:
+                for port in ports:
+                    if not status[port]:
+                        status[port] = is_port_listening("127.0.0.1", port, timeout=0.4)
+                if not any(status.values()):
+                    missing = ", ".join(str(p) for p in ports)
+                    print(
+                        f"[EARLY-EXIT] {name} wrapper exited rc={rc} and no port "
+                        f"({missing}) ever bound (grace {early_exit_grace:.0f}s exhausted)"
+                    )
+                    return status
+        time.sleep(0.5)
+
+    return status
+
+
+def _wait_for_port_or_exit(
+    name: str,
+    process: subprocess.Popen,
+    port: int,
+    timeout: float = 30.0,
+    early_exit_grace: float = 8.0,
+) -> bool:
+    """
+    Single-port wrapper kept for the Dash/Streamlit/FastAPI/Next launchers.
+
+    Behaviour is unchanged for them: all() over one port is just that port.
+    """
+    status = _wait_for_ports(name, process, [port], timeout, early_exit_grace)
+    return all(status.values())
+
+
+def _launch_registry() -> Dict[str, Dict]:
+    """Flat registry of all launcher configs keyed as TYPE:Name."""
+    reg: Dict[str, Dict] = {}
+    for name, cfg in BAT_SERVICES.items():
+        reg[f"BAT:{name}"] = cfg
+    for name, cfg in DASH_APPS.items():
+        reg[f"DASH:{name}"] = cfg
+    for name, cfg in STREAMLIT_APPS.items():
+        reg[f"STREAMLIT:{name}"] = cfg
+    for name, cfg in FASTAPI_APPS.items():
+        reg[f"FASTAPI:{name}"] = cfg
+    for name, cfg in DOCKER_COMPOSE_APPS.items():
+        reg[f"DOCKER:{name}"] = cfg
+    for name, cfg in NEXTJS_APPS.items():
+        reg[f"NEXTJS:{name}"] = cfg
+    return reg
+
+
+def _config_launch_artifact(cfg: Dict) -> Optional[Path]:
+    """Return the primary file this service needs to start."""
+    for key in ("bat_path", "script_path", "compose_file"):
+        p = cfg.get(key)
+        if p is not None:
+            return Path(p)
+    cwd = cfg.get("cwd")
+    return Path(cwd) if cwd else None
+
+
+def verify_dashboard_launch_coverage() -> Tuple[List[str], List[str]]:
+    """
+    Compare debug.py dashboard sites to launcher registry.
+    Returns (errors, warnings).
+    """
+    errors: List[str] = []
+    warnings: List[str] = []
+    reg = _launch_registry()
+
+    for site_name, keys in DEBUG_SITE_LAUNCH_TARGETS.items():
+        for key in keys:
+            if key not in reg:
+                errors.append(f"{site_name}: launcher key missing ({key})")
+                continue
+            artifact = _config_launch_artifact(reg[key])
+            if artifact is None:
+                errors.append(f"{site_name}: no bat/script/compose path ({key})")
+            elif not artifact.exists():
+                errors.append(f"{site_name}: missing file ({artifact})")
+
+    if "DASH:Debug Page" not in reg:
+        errors.append("Debug Page: launcher config missing (service dashboard)")
+    else:
+        dbg_art = _config_launch_artifact(reg["DASH:Debug Page"])
+        if dbg_art and not dbg_art.exists():
+            errors.append(f"Debug Page: missing file ({dbg_art})")
+
+    # Launcher entries not tied to a dashboard card (informational only)
+    covered_keys = {k for keys in DEBUG_SITE_LAUNCH_TARGETS.values() for k in keys}
+    extra = sorted(set(reg.keys()) - covered_keys - {"DASH:Debug Page"})
+    optional_extras = {
+        "BAT:Import Dropbox",
+        "STREAMLIT:TWIFO Import Dropbox",
+        "DASH:Price Dashboard",
+        "BAT:AGM Docs",
+        "DASH:SriPNL",
+        "FASTAPI:Order Flow Website Backend",
+        "NEXTJS:Order Flow Website",
+        "DOCKER:Summary Engine",
+    }
+    for key in extra:
+        if key not in optional_extras:
+            warnings.append(f"Launcher entry not on dashboard: {key}")
+
+    # The staff/admin tearsheet ports are manual-only by design. If one ever shows
+    # up in a launcher config it means someone wired an elevated, Access-gated
+    # surface into automatic sign-in startup - fail loudly rather than start it.
+    for key, cfg in reg.items():
+        for port in service_health_ports(cfg):
+            if port in MANUAL_ONLY_PORTS:
+                errors.append(
+                    f"{key}: port {port} is manual-only ({MANUAL_ONLY_PORTS[port]}) "
+                    f"and must not be auto-started"
+                )
+
+    return errors, warnings
+
+
+def launch_debug_page_first(
+    all_services: Dict[str, Any],
+    failed_services: List[str],
+) -> None:
+    """Start the Service Dashboard (debug.py) before other services."""
+    name = "Debug Page"
+    config = DASH_APPS.get(name)
+    if not config:
+        failed_services.append(f"{name} (no config)")
+        return
+
+    print("[PHASE 0] Launching Debug Page (Service Dashboard) first...")
+    proc = launch_python_service(name, config)
+    if proc:
+        all_services[name] = proc
+        port = config.get("port", 8006)
+        if port and is_port_listening("127.0.0.1", port, timeout=1.0):
+            print(f"[OK] Debug Page ready on port {port}")
+        else:
+            print(f"[WARN] Debug Page may still be starting on port {port}")
+    else:
+        failed_services.append(name)
+    print()
+
+
+def _dash_apps_excluding_debug() -> Dict[str, Dict]:
+    return {k: v for k, v in DASH_APPS.items() if k != "Debug Page"}
+
+
+def reuse_if_already_running(
+    name: str,
+    ports: Optional[Any],
+) -> Optional[ExistingServiceHandle]:
+    """
+    Make repeated launcher runs idempotent by reusing fully-healthy services.
+
+    *ports* may be a single port (every existing caller) or a list of ports.
+
+    We only reuse when EVERY required port is listening. A half-up service is
+    deliberately NOT reused: falling through to a relaunch lets the service's own
+    launcher clean up the stale half (reboot_glenn_uploader.bat taskkills both
+    5173 and 8091 before starting), rather than leaving it wedged in partial.
+    """
+    if not ports:
+        return None
+
+    port_list = [ports] if isinstance(ports, int) else [int(p) for p in ports]
+    if not port_list:
+        return None
+
+    status = {p: is_port_listening("127.0.0.1", p, timeout=1.0) for p in port_list}
+    state = classify_port_health(status)
+
+    if state == HEALTH_ONLINE:
+        pid = get_pid_for_port(port_list[0])
+        pid_msg = f" (PID: {pid})" if pid else ""
+        listening = ", ".join(str(p) for p in port_list)
+        print(f"[SKIP] {name} already running on port(s) {listening}{pid_msg}; reusing existing service")
+        return ExistingServiceHandle(pid)
+
+    if state == HEALTH_PARTIAL:
+        up = ", ".join(str(p) for p, ok in status.items() if ok)
+        down = ", ".join(str(p) for p, ok in status.items() if not ok)
+        print(
+            f"[PARTIAL] {name} is half-up (listening: {up} / not listening: {down}); "
+            f"relaunching so its launcher can reset the whole stack"
+        )
+
+    return None
+
+
+def escape_cmd_title(title: str) -> str:
+    """Escape service names for cmd.exe title commands."""
+    return title.replace("&", "^&").replace('"', "'")
+
+
+def _popen_new_window_bat(title: str, bat_name: str, cwd: str) -> subprocess.Popen:
+    """
+    Spawn a .bat in a NEW visible cmd window using the Windows `start` command.
+
+    Why not Popen + CREATE_NEW_CONSOLE?
+      - For Flask debug-mode / werkzeug reloader and similar self-detaching
+        scripts, CREATE_NEW_CONSOLE causes the spawned cmd.exe wrapper to exit
+        immediately rc=1 and the python child also dies (handle inheritance
+        issue). The `start` shell built-in is the canonical Windows way to spawn
+        a detached, visible console window that survives.
+    """
+    safe_title = escape_cmd_title(title)
+    cmd_string = f'start "{safe_title}" cmd.exe /k "call \"{bat_name}\""'
+    return subprocess.Popen(cmd_string, cwd=cwd, shell=True)
+
+
+def _popen_new_window_cmdline(title: str, cmdline: str, cwd: str) -> subprocess.Popen:
+    """
+    Same idea as `_popen_new_window_bat` but for an arbitrary command line
+    (e.g. a python service or `npx next dev -p PORT`). The new cmd window keeps
+    open so the user can read output and Ctrl+C it.
+    """
+    safe_title = escape_cmd_title(title)
+    cmd_string = f'start "{safe_title}" cmd.exe /k "{cmdline}"'
+    return subprocess.Popen(cmd_string, cwd=cwd, shell=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -482,73 +427,86 @@ service_logs: Dict[str, Path] = {}
 
 
 def launch_bat_service(name: str, config: Dict) -> Optional[subprocess.Popen]:
-    """Launch a .bat service with proper PID tracking and logging."""
+    """Launch a .bat service in a visible console window with descriptive title."""
     bat_path = config["bat_path"]
     port = config.get("port")
+    health_ports = service_health_ports(config)
     python_exe = config.get("python_exe")
-    
+    health_timeout = float(config.get("health_timeout", 60))
+
     if not bat_path.exists():
         error_msg = f"[ERROR] .bat not found for {name}: {bat_path}"
         print(error_msg)
+        service_health_state[name] = HEALTH_OFFLINE
         return None
-    
+
+    existing = reuse_if_already_running(name, health_ports)
+    if existing:
+        service_health_state[name] = HEALTH_ONLINE
+        return existing
+
     # If python_exe is specified, launch directly with Python instead of bat
     if python_exe and config.get("script_path"):
         return launch_python_service(name, config)
-    
-    print(f"[LAUNCH] {name} (BAT) → {bat_path.name}")
-    
+
+    print(f"[LAUNCH] {name} (BAT) -> {bat_path.name}")
+
     log_file = get_log_file(name)
     service_logs[name] = log_file
-    
+
     try:
-        with open(log_file, "w", encoding="utf-8") as log:
-            log.write(f"=== {name} Launch Log ===\n")
-            log.write(f"Timestamp: {datetime.now().isoformat()}\n")
-            log.write(f"Command: {bat_path}\n")
-            log.write(f"CWD: {bat_path.parent}\n")
-            log.write("=" * 70 + "\n\n")
-            log.flush()
-            
-            process = subprocess.Popen(
-                [str(bat_path)],
-                cwd=str(bat_path.parent),
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
+        port_info = f" - Port {port}" if port else ""
+        window_title = f"SERVICE: {name}{port_info}"
+        process = _popen_new_window_bat(window_title, bat_path.name, str(bat_path.parent))
+        print(f"[OK] {name} launched in new window (PID: {process.pid})")
+
+        if not health_ports:
+            service_health_state[name] = HEALTH_UNKNOWN
+            return process
+
+        listed = ", ".join(str(p) for p in health_ports)
+        print(
+            f"[HEALTH] Waiting for {name} to bind to port(s) {listed} "
+            f"(timeout {health_timeout:.0f}s)..."
+        )
+        status = _wait_for_ports(name, process, health_ports, timeout=health_timeout)
+        state = classify_port_health(status)
+        service_health_state[name] = state
+
+        # Always report every port individually, so a half-up stack is visible in
+        # the startup log rather than hidden behind a single OK.
+        for p in health_ports:
+            print(f"[HEALTH] {name} port {p}: {'LISTENING' if status[p] else 'NOT LISTENING'}")
+
+        if state == HEALTH_ONLINE:
+            print(f"[OK] {name} is fully up on port(s) {listed}")
+        elif state == HEALTH_PARTIAL:
+            down = ", ".join(str(p) for p, ok in status.items() if not ok)
+            print(
+                f"[PARTIAL] {name} started only partially - port(s) {down} never bound "
+                f"within {health_timeout:.0f}s. NOT a successful start."
             )
-        
-        time.sleep(1)
-        
-        if process.poll() is not None:
-            print(f"[ERROR] {name} terminated immediately (exit code: {process.returncode})")
-            print(f"[ERROR] Last 50 lines from log:")
-            print(read_last_lines(log_file, 50))
-            return None
-        
-        print(f"[OK] {name} launched (PID: {process.pid}, log: {log_file.name})")
-        
-        if port:
-            print(f"[HEALTH] Waiting for {name} to bind to port {port}...")
-            if wait_for_port("127.0.0.1", port, timeout=20):
-                print(f"[OK] {name} is now listening on port {port}")
-            else:
-                print(f"[WARN] {name} did not start listening on port {port} within 20s")
-                print(f"[WARN] Check log file: {log_file}")
-        
+        else:
+            print(
+                f"[WARN] {name} did not start listening on port(s) {listed} "
+                f"within {health_timeout:.0f}s"
+            )
+
         return process
-        
+
     except Exception as e:
         print(f"[ERROR] Failed to launch {name}: {e}")
+        service_health_state[name] = HEALTH_OFFLINE
         return None
 
 
 def launch_python_service(name: str, config: Dict) -> Optional[subprocess.Popen]:
-    """Launch a Python service with explicit python_exe and logging."""
+    """Launch a Python service in a visible console window with descriptive title."""
     script_path = config.get("script_path")
     port = config.get("port")
     python_exe = config.get("python_exe")
     cwd = config.get("cwd", script_path.parent if script_path else BASE_DIR)
+    health_timeout = float(config.get("health_timeout", 30))
     
     if not script_path or not script_path.exists():
         print(f"[ERROR] Script not found for {name}: {script_path}")
@@ -561,6 +519,10 @@ def launch_python_service(name: str, config: Dict) -> Optional[subprocess.Popen]
     if not os.path.exists(python_exe):
         print(f"[ERROR] Python executable not found for {name}: {python_exe}")
         return None
+
+    existing = reuse_if_already_running(name, port)
+    if existing:
+        return existing
     
     # Run preflight checks if specified
     if "preflight_checks" in config:
@@ -570,60 +532,33 @@ def launch_python_service(name: str, config: Dict) -> Optional[subprocess.Popen]
             print(f"  {message}")
             return None
     
-    print(f"[LAUNCH] {name} (Python) → {script_path.name}")
+    print(f"[LAUNCH] {name} (Python) -> {script_path.name}")
     print(f"  Python: {python_exe}")
     print(f"  CWD: {cwd}")
-    
-    log_file = get_log_file(name)
-    service_logs[name] = log_file
-    
+
     try:
-        with open(log_file, "w", encoding="utf-8") as log:
-            log.write(f"=== {name} Launch Log ===\n")
-            log.write(f"Timestamp: {datetime.now().isoformat()}\n")
-            log.write(f"Python: {python_exe}\n")
-            log.write(f"Script: {script_path}\n")
-            log.write(f"CWD: {cwd}\n")
-            log.write("=" * 70 + "\n\n")
-            log.flush()
-            
-            process = subprocess.Popen(
-                [str(python_exe), str(script_path)],
-                cwd=str(cwd),
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
-            )
-        
-        time.sleep(2)
-        
-        if process.poll() is not None:
-            print(f"[ERROR] {name} terminated immediately (exit code: {process.returncode})")
-            print(f"[ERROR] Last 50 lines from log:")
-            print(read_last_lines(log_file, 50))
-            return None
-        
-        print(f"[OK] {name} launched (PID: {process.pid}, log: {log_file.name})")
-        
+        port_info = f" - Port {port}" if port else ""
+        window_title = f"SERVICE: {name}{port_info}"
+        cmdline = f'"{python_exe}" "{script_path}"'
+        process = _popen_new_window_cmdline(window_title, cmdline, str(cwd))
+        print(f"[OK] {name} launched in new window (PID: {process.pid})")
+
         if port:
-            print(f"[HEALTH] Waiting for {name} to bind to port {port}...")
-            if wait_for_port("127.0.0.1", port, timeout=20):
+            print(f"[HEALTH] Waiting for {name} to bind to port {port} (timeout {health_timeout:.0f}s)...")
+            if _wait_for_port_or_exit(name, process, port, timeout=health_timeout):
                 print(f"[OK] {name} is now listening on port {port}")
             else:
-                print(f"[WARN] {name} did not start listening on port {port} within 20s")
-                print(f"[WARN] Check log file: {log_file}")
-                print(f"[WARN] Last 50 lines from log:")
-                print(read_last_lines(log_file, 50))
-        
+                print(f"[WARN] {name} did not start listening on port {port} within {health_timeout:.0f}s")
+
         return process
-        
+
     except Exception as e:
         print(f"[ERROR] Failed to launch {name}: {e}")
         return None
 
 
 def launch_streamlit_service(name: str, config: Dict) -> Optional[subprocess.Popen]:
-    """Launch a Streamlit application with explicit python_exe."""
+    """Launch a Streamlit application in a visible console window with descriptive title."""
     script_path = config["script_path"]
     port = config["port"]
     python_exe = config["python_exe"]
@@ -636,73 +571,42 @@ def launch_streamlit_service(name: str, config: Dict) -> Optional[subprocess.Pop
     if not os.path.exists(python_exe):
         print(f"[ERROR] Python executable not found for {name}: {python_exe}")
         return None
+
+    existing = reuse_if_already_running(name, port)
+    if existing:
+        return existing
     
-    print(f"[LAUNCH] {name} (Streamlit) → {script_path.name}")
+    print(f"[LAUNCH] {name} (Streamlit) -> {script_path.name}")
     print(f"  Python: {python_exe}")
     print(f"  Port: {port}")
     
-    log_file = get_log_file(name)
-    service_logs[name] = log_file
-    
     rel_path = script_path.relative_to(cwd) if script_path.is_relative_to(cwd) else script_path
-    
+
     try:
-        with open(log_file, "w", encoding="utf-8") as log:
-            log.write(f"=== {name} Launch Log ===\n")
-            log.write(f"Timestamp: {datetime.now().isoformat()}\n")
-            log.write(f"Python: {python_exe}\n")
-            log.write(f"Script: {script_path}\n")
-            log.write(f"Port: {port}\n")
-            log.write(f"CWD: {cwd}\n")
-            log.write("=" * 70 + "\n\n")
-            log.flush()
-            
-            process = subprocess.Popen(
-                [
-                    str(python_exe),
-                    "-m",
-                    "streamlit",
-                    "run",
-                    str(rel_path),
-                    "--server.port",
-                    str(port),
-                    "--server.headless",
-                    "true",
-                    "--browser.gatherUsageStats",
-                    "false",
-                ],
-                cwd=str(cwd),
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
-            )
-        
-        time.sleep(2)
-        
-        if process.poll() is not None:
-            print(f"[ERROR] {name} terminated immediately (exit code: {process.returncode})")
-            print(f"[ERROR] Last 50 lines from log:")
-            print(read_last_lines(log_file, 50))
-            return None
-        
-        print(f"[OK] {name} launched (PID: {process.pid}, log: {log_file.name})")
-        
+        window_title = f"SERVICE: {name} - Port {port}"
+        cmdline = (
+            f'"{python_exe}" -m streamlit run "{rel_path}" '
+            f'--server.port {port} --server.headless true '
+            f'--browser.gatherUsageStats false'
+        )
+        process = _popen_new_window_cmdline(window_title, cmdline, str(cwd))
+        print(f"[OK] {name} launched in new window (PID: {process.pid})")
+
         print(f"[HEALTH] Waiting for {name} to bind to port {port}...")
-        if wait_for_port("127.0.0.1", port, timeout=20):
+        if _wait_for_port_or_exit(name, process, port, timeout=30):
             print(f"[OK] {name} is now listening on port {port}")
         else:
-            print(f"[WARN] {name} did not start listening on port {port} within 20s")
-            print(f"[WARN] Check log file: {log_file}")
-        
+            print(f"[WARN] {name} did not start listening on port {port} within 30s")
+
         return process
-        
+
     except Exception as e:
         print(f"[ERROR] Failed to launch {name}: {e}")
         return None
 
 
 def launch_fastapi_service(name: str, config: Dict) -> Optional[subprocess.Popen]:
-    """Launch a FastAPI application with explicit python_exe and uvicorn."""
+    """Launch a FastAPI application in a visible console window with descriptive title."""
     script_path = config["script_path"]
     port = config["port"]
     python_exe = config["python_exe"]
@@ -716,6 +620,10 @@ def launch_fastapi_service(name: str, config: Dict) -> Optional[subprocess.Popen
     if not os.path.exists(python_exe):
         print(f"[ERROR] Python executable not found for {name}: {python_exe}")
         return None
+
+    existing = reuse_if_already_running(name, port)
+    if existing:
+        return existing
     
     # Run preflight checks if specified
     if "preflight_checks" in config:
@@ -725,114 +633,58 @@ def launch_fastapi_service(name: str, config: Dict) -> Optional[subprocess.Popen
             print(f"  {message}")
             return None
     
-    print(f"[LAUNCH] {name} (FastAPI) → {uvicorn_module}")
+    print(f"[LAUNCH] {name} (FastAPI) -> {uvicorn_module}")
     print(f"  Python: {python_exe}")
     print(f"  Port: {port}")
-    
-    log_file = get_log_file(name)
-    service_logs[name] = log_file
-    
+
     try:
-        with open(log_file, "w", encoding="utf-8") as log:
-            log.write(f"=== {name} Launch Log ===\n")
-            log.write(f"Timestamp: {datetime.now().isoformat()}\n")
-            log.write(f"Python: {python_exe}\n")
-            log.write(f"Module: {uvicorn_module}\n")
-            log.write(f"Port: {port}\n")
-            log.write(f"CWD: {cwd}\n")
-            log.write("=" * 70 + "\n\n")
-            log.flush()
-            
-            process = subprocess.Popen(
-                [
-                    str(python_exe),
-                    "-m",
-                    "uvicorn",
-                    uvicorn_module,
-                    "--host",
-                    "0.0.0.0",
-                    "--port",
-                    str(port),
-                    "--reload"
-                ],
-                cwd=str(cwd),
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
-            )
-        
-        time.sleep(2)
-        
-        if process.poll() is not None:
-            print(f"[ERROR] {name} terminated immediately (exit code: {process.returncode})")
-            print(f"[ERROR] Last 50 lines from log:")
-            print(read_last_lines(log_file, 50))
-            return None
-        
-        print(f"[OK] {name} launched (PID: {process.pid}, log: {log_file.name})")
-        
+        window_title = f"SERVICE: {name} - Port {port}"
+        cmdline = (
+            f'"{python_exe}" -m uvicorn {uvicorn_module} '
+            f'--host 0.0.0.0 --port {port} --reload'
+        )
+        process = _popen_new_window_cmdline(window_title, cmdline, str(cwd))
+        print(f"[OK] {name} launched in new window (PID: {process.pid})")
+
         print(f"[HEALTH] Waiting for {name} to bind to port {port}...")
-        if wait_for_port("127.0.0.1", port, timeout=20):
+        if _wait_for_port_or_exit(name, process, port, timeout=30):
             print(f"[OK] {name} is now listening on port {port}")
         else:
-            print(f"[WARN] {name} did not start listening on port {port} within 20s")
-            print(f"[WARN] Check log file: {log_file}")
-            print(f"[WARN] Last 50 lines from log:")
-            print(read_last_lines(log_file, 50))
-        
+            print(f"[WARN] {name} did not start listening on port {port} within 30s")
+
         return process
-        
+
     except Exception as e:
         print(f"[ERROR] Failed to launch {name}: {e}")
         return None
 
 
 def launch_nextjs_service(name: str, config: Dict) -> Optional[subprocess.Popen]:
-    """Launch a Next.js application."""
+    """Launch a Next.js application in a visible console window with descriptive title."""
     cwd = config["cwd"]
     port = config["port"]
     
     if not cwd.exists():
         print(f"[ERROR] Directory not found for {name}: {cwd}")
         return None
+
+    existing = reuse_if_already_running(name, port)
+    if existing:
+        return existing
     
-    print(f"[LAUNCH] {name} (Next.js) → port {port}")
-    
-    log_file = get_log_file(name)
-    service_logs[name] = log_file
-    
+    print(f"[LAUNCH] {name} (Next.js) -> port {port}")
+
     try:
-        with open(log_file, "w", encoding="utf-8") as log:
-            log.write(f"=== {name} Launch Log ===\n")
-            log.write(f"Timestamp: {datetime.now().isoformat()}\n")
-            log.write(f"Port: {port}\n")
-            log.write(f"CWD: {cwd}\n")
-            log.write("=" * 70 + "\n\n")
-            log.flush()
-            
-            process = subprocess.Popen(
-                ["cmd.exe", "/k", f"npx next dev -p {port}"],
-                cwd=str(cwd),
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
-            )
-        
-        time.sleep(3)
-        
-        if process.poll() is not None:
-            print(f"[ERROR] {name} terminated immediately (exit code: {process.returncode})")
-            print(f"[ERROR] Last 50 lines from log:")
-            print(read_last_lines(log_file, 50))
-            return None
-        
-        print(f"[OK] {name} launched (PID: {process.pid}, log: {log_file.name})")
-        
-        print(f"[HEALTH] Waiting for {name} to bind to port {port} (30s for Next.js compile)...")
-        if wait_for_port("127.0.0.1", port, timeout=30):
+        window_title = f"SERVICE: {name} - Port {port}"
+        cmdline = f"npx next dev -p {port}"
+        process = _popen_new_window_cmdline(window_title, cmdline, str(cwd))
+        print(f"[OK] {name} launched in new window (PID: {process.pid})")
+
+        print(f"[HEALTH] Waiting for {name} to bind to port {port} (60s for Next.js compile)...")
+        if _wait_for_port_or_exit(name, process, port, timeout=60):
             print(f"[OK] {name} is now listening on port {port}")
         else:
-            print(f"[WARN] {name} did not start listening on port {port} within 30s")
+            print(f"[WARN] {name} did not start listening on port {port} within 60s")
             print(f"[WARN] Next.js first compile can take 30 to 60 seconds")
         
         return process
@@ -926,7 +778,7 @@ def launch_docker_compose_service(name: str, config: Dict) -> Optional[subproces
         print(f"[ERROR] Docker Compose file not found for {name}: {compose_file}")
         return None
 
-    print(f"[LAUNCH] {name} (Docker Compose) → {compose_file.name}")
+    print(f"[LAUNCH] {name} (Docker Compose) -> {compose_file.name}")
 
     log_file = get_log_file(name)
     service_logs[name] = log_file
@@ -996,41 +848,58 @@ def launch_docker_compose_service(name: str, config: Dict) -> Optional[subproces
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def find_chrome_executable() -> Optional[str]:
+    """Find Chrome on this Windows machine."""
+    candidates = [
+        os.path.join(os.environ.get("ProgramFiles", ""), "Google", "Chrome", "Application", "chrome.exe"),
+        os.path.join(os.environ.get("ProgramFiles(x86)", ""), "Google", "Chrome", "Application", "chrome.exe"),
+        os.path.join(os.environ.get("LocalAppData", ""), "Google", "Chrome", "Application", "chrome.exe"),
+    ]
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return None
+
+
 def open_browser_tabs(services: Dict[str, subprocess.Popen]) -> None:
-    """Open browser tabs for all web services after a delay."""
-    print(f"\n[INFO] Waiting {BROWSER_OPEN_DELAY}s before opening browsers...\n")
+    """Open Chrome directly to the Debug Page after services have had time to bind."""
+    print(f"\n[INFO] Waiting {BROWSER_OPEN_DELAY}s before opening Chrome to the Debug Page...\n")
     time.sleep(BROWSER_OPEN_DELAY)
 
-    urls_to_open = []
+    debug_config = DASH_APPS.get("Debug Page", {})
+    debug_url = debug_config.get("url", "http://localhost:8006")
+    debug_port = debug_config.get("port", 8006)
 
-    for name, config in list(DASH_APPS.items()) + list(STREAMLIT_APPS.items()) + list(FASTAPI_APPS.items()):
-        if name in services and name not in SKIP_BROWSER_OPEN:
-            url = config.get("url")
-            port = config.get("port")
-            if url and port not in SKIP_PORTS:
-                urls_to_open.append((name, url))
+    if "Debug Page" not in services and not is_port_listening("127.0.0.1", debug_port, timeout=1.0):
+        print("[WARN] Debug Page is not running; skipping Chrome launch")
+        return
 
-    for name, config in DOCKER_COMPOSE_APPS.items():
-        if name in services:
-            frontend_url = config.get("urls", {}).get("frontend")
-            if frontend_url:
-                urls_to_open.append((name, frontend_url))
+    chrome_path = find_chrome_executable()
+    try:
+        if chrome_path:
+            subprocess.Popen([chrome_path, debug_url])
+            print(f"[OK] Chrome opened to Debug Page: {debug_url}")
+            print(f"[INFO] Chrome command: {chrome_path} {debug_url}")
+        else:
+            webbrowser.open(debug_url)
+            print(f"[WARN] Chrome not found; opened default browser to Debug Page: {debug_url}")
+    except Exception as e:
+        print(f"[ERROR] Failed to open Debug Page in Chrome: {e}")
 
-    for name, config in NEXTJS_APPS.items():
-        if name in services:
-            url = config.get("url")
-            if url:
-                urls_to_open.append((name, url))
 
-    if urls_to_open:
-        print(f"[INFO] Opening {len(urls_to_open)} browser tabs...")
-        for name, url in urls_to_open:
-            try:
-                webbrowser.open(url)
-                print(f"  Browser opened for {name}: {url}")
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"  Failed to open browser for {name}: {e}")
+def check_system_resources() -> Tuple[bool, str]:
+    """Check if system has enough resources to continue launching services."""
+    try:
+        mem = psutil.virtual_memory()
+        available_gb = mem.available / (1024 ** 3)
+        
+        if available_gb < MEMORY_THRESHOLD_GB:
+            return False, f"Low memory: {available_gb:.1f} GB available (need {MEMORY_THRESHOLD_GB} GB)"
+        
+        return True, f"Memory OK: {available_gb:.1f} GB available"
+    except Exception as e:
+        # If psutil fails, continue anyway
+        return True, f"Memory check unavailable: {e}"
 
 
 def save_service_registry(services: Dict[str, subprocess.Popen]) -> None:
@@ -1061,15 +930,88 @@ def save_service_registry(services: Dict[str, subprocess.Popen]) -> None:
         print(f"[WARN] Failed to save service registry: {e}")
 
 
+def _launch_phase_items(
+    phase_label: str,
+    items: Dict[str, Dict],
+    launcher: Callable[..., Any],
+    all_services: Dict[str, Any],
+    failed_services: List[str],
+) -> None:
+    """
+    Launch every entry in *items* using *launcher(name, config)*.
+
+    When PARALLEL_LAUNCH_ENABLED: all starts in this phase run concurrently (bounded
+    by PARALLEL_MAX_WORKERS). Phases still run one-after-another so Docker / Next
+    do not fight with earlier waves for the same global resources until their phase.
+
+    When disabled: original sequential behavior with LAUNCH_PAUSE between each.
+    """
+    if not items:
+        return
+
+    if not PARALLEL_LAUNCH_ENABLED:
+        for name, config in items.items():
+            proc = launcher(name, config)
+            if proc:
+                all_services[name] = proc
+            else:
+                failed_services.append(name)
+            time.sleep(LAUNCH_PAUSE)
+        print(f"[{phase_label}] Sequential batch complete ({len(items)} services).")
+        return
+
+    n = len(items)
+    max_workers = PARALLEL_MAX_WORKERS or min(24, max(4, n))
+    max_workers = max(1, min(max_workers, n))
+
+    print(
+        f"[{phase_label}] Launching {n} services in parallel "
+        f"(max_workers={max_workers})..."
+    )
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_name = {
+            executor.submit(launcher, name, config): name
+            for name, config in items.items()
+        }
+        for fut in as_completed(future_to_name):
+            name = future_to_name[fut]
+            try:
+                proc = fut.result()
+                if proc:
+                    all_services[name] = proc
+                else:
+                    failed_services.append(name)
+            except Exception as exc:
+                print(f"[ERROR] {name} launch raised: {exc}")
+                failed_services.append(name)
+
+    print(f"[{phase_label}] Parallel batch complete ({n} services).")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN LAUNCHER
 # ─────────────────────────────────────────────────────────────────────────────
-
 
 def launch_all_services() -> Tuple[Dict[str, subprocess.Popen], Dict[str, int]]:
     """Launch all services and return running processes and fail counts."""
     all_services: Dict[str, subprocess.Popen] = {}
     failed_services: List[str] = []
+
+    cov_errors, cov_warnings = verify_dashboard_launch_coverage()
+    if cov_errors:
+        print("[COVERAGE] Dashboard sites with launcher/config problems:")
+        for line in cov_errors:
+            print(f"  [ERROR] {line}")
+    if cov_warnings:
+        print("[COVERAGE] Extra launcher entries (not on dashboard):")
+        for line in cov_warnings:
+            print(f"  [INFO] {line}")
+    if not cov_errors:
+        print(
+            f"[COVERAGE] All {len(DEBUG_SITE_LAUNCH_TARGETS)} dashboard sites "
+            f"mapped to launcher configs."
+        )
 
     print("\n" + "=" * 70)
     print("  COMPREHENSIVE SERVICE LAUNCHER")
@@ -1090,50 +1032,66 @@ def launch_all_services() -> Tuple[Dict[str, subprocess.Popen], Dict[str, int]]:
         + len(DOCKER_COMPOSE_APPS)
         + len(NEXTJS_APPS)
     )
-    print(f"[INFO] Total: {total} services\n")
+    print(f"[INFO] Total: {total} services")
+    print(
+        f"[INFO] Parallel launch: {PARALLEL_LAUNCH_ENABLED} "
+        f"(max_workers={PARALLEL_MAX_WORKERS or 'auto'})\n"
+    )
+
+    # Phase 0: Service Dashboard first (debug.py on port 8006)
+    launch_debug_page_first(all_services, failed_services)
 
     # Phase 1: Launch .bat services
     print("[PHASE 1] Launching .bat services...")
-    for name, config in BAT_SERVICES.items():
-        process = launch_bat_service(name, config)
-        if process:
-            all_services[name] = process
-        else:
-            failed_services.append(name)
-        time.sleep(LAUNCH_PAUSE)
+    
+    # Check memory before starting
+    if MEMORY_CHECK_ENABLED:
+        mem_ok, mem_msg = check_system_resources()
+        print(f"[MEMORY] {mem_msg}")
+        if not mem_ok:
+            print(f"[WARN] Low memory detected. Consider closing other applications.")
+            print(f"[WARN] Continuing with reduced launch speed...")
+    
+    _launch_phase_items(
+        "PHASE 1", BAT_SERVICES, launch_bat_service, all_services, failed_services
+    )
+    print(f"[PHASE 1] Complete. Pausing {PHASE_PAUSE}s before next phase...")
+    time.sleep(PHASE_PAUSE)
     print()
 
-    # Phase 2: Launch Dash applications
+    # Phase 2: Launch Dash applications (Debug Page already started in Phase 0)
     print("[PHASE 2] Launching Dash applications...")
-    for name, config in DASH_APPS.items():
-        process = launch_python_service(name, config)
-        if process:
-            all_services[name] = process
-        else:
-            failed_services.append(name)
-        time.sleep(LAUNCH_PAUSE)
+    _launch_phase_items(
+        "PHASE 2",
+        _dash_apps_excluding_debug(),
+        launch_python_service,
+        all_services,
+        failed_services,
+    )
+    print(f"[PHASE 2] Complete. Pausing {PHASE_PAUSE}s before next phase...")
+    time.sleep(PHASE_PAUSE)
     print()
 
     # Phase 3: Launch Streamlit applications
     print("[PHASE 3] Launching Streamlit applications...")
-    for name, config in STREAMLIT_APPS.items():
-        process = launch_streamlit_service(name, config)
-        if process:
-            all_services[name] = process
-        else:
-            failed_services.append(name)
-        time.sleep(LAUNCH_PAUSE)
+    _launch_phase_items(
+        "PHASE 3",
+        STREAMLIT_APPS,
+        launch_streamlit_service,
+        all_services,
+        failed_services,
+    )
+    print(f"[PHASE 3] Complete. Pausing {PHASE_PAUSE}s before next phase...")
+    time.sleep(PHASE_PAUSE)
     print()
 
     # Phase 4: Launch FastAPI applications
     print("[PHASE 4] Launching FastAPI applications...")
-    for name, config in FASTAPI_APPS.items():
-        process = launch_fastapi_service(name, config)
-        if process:
-            all_services[name] = process
-        else:
-            failed_services.append(name)
-        time.sleep(LAUNCH_PAUSE)
+    _launch_phase_items(
+        "PHASE 4", FASTAPI_APPS, launch_fastapi_service, all_services, failed_services
+    )
+    print(f"[PHASE 4] Complete. Pausing {PHASE_PAUSE}s before next phase...")
+    time.sleep(PHASE_PAUSE)
     print()
 
     # Phase 5: Launch Docker Compose applications
@@ -1142,29 +1100,29 @@ def launch_all_services() -> Tuple[Dict[str, subprocess.Popen], Dict[str, int]]:
         docker_available, docker_info = check_docker_available()
         if docker_available:
             print(f"[OK] {docker_info}")
-            for name, config in DOCKER_COMPOSE_APPS.items():
-                process = launch_docker_compose_service(name, config)
-                if process:
-                    all_services[name] = process
-                else:
-                    failed_services.append(name)
-                time.sleep(LAUNCH_PAUSE)
+            _launch_phase_items(
+                "PHASE 5",
+                DOCKER_COMPOSE_APPS,
+                launch_docker_compose_service,
+                all_services,
+                failed_services,
+            )
         else:
             print(f"[ERROR] {docker_info}")
             print(f"[WARN] Skipping Docker Compose services")
             for name in DOCKER_COMPOSE_APPS.keys():
                 failed_services.append(f"{name} (Docker not available)")
+    print(f"[PHASE 5] Complete. Pausing {PHASE_PAUSE}s before next phase...")
+    time.sleep(PHASE_PAUSE)
     print()
 
-    # Phase 6: Launch Next.js applications
+    # Phase 6: Launch Next.js applications (most resource-intensive)
     print("[PHASE 6] Launching Next.js applications...")
-    for name, config in NEXTJS_APPS.items():
-        process = launch_nextjs_service(name, config)
-        if process:
-            all_services[name] = process
-        else:
-            failed_services.append(name)
-        time.sleep(LAUNCH_PAUSE)
+    _launch_phase_items(
+        "PHASE 6", NEXTJS_APPS, launch_nextjs_service, all_services, failed_services
+    )
+    print(f"[PHASE 6] Complete. Pausing {PHASE_PAUSE}s before next phase...")
+    time.sleep(PHASE_PAUSE)
     print()
 
     # Phase 7: Launch Cloudflare Tunnel
@@ -1181,7 +1139,7 @@ def launch_all_services() -> Tuple[Dict[str, subprocess.Popen], Dict[str, int]]:
             print(f"[WARN] Cloudflare Tunnel error: {e}")
         print()
 
-    # Phase 8: Open browser tabs
+    # Phase 8: Open Chrome to the Debug Page
     open_browser_tabs(all_services)
 
     # Phase 9: Save service registry
@@ -1194,14 +1152,34 @@ def launch_all_services() -> Tuple[Dict[str, subprocess.Popen], Dict[str, int]]:
     print("\n" + "=" * 70)
     print("  LAUNCH SUMMARY")
     print("=" * 70)
-    print(f"\n[INFO] Successfully launched: {len(all_services)} services")
+    launched_count = len([k for k in all_services if k != "_tunnel_manager"])
+    partial_services = sorted(
+        name for name, state in service_health_state.items() if state == HEALTH_PARTIAL
+    )
+    # A partial service is running, but it is NOT a success: report it separately
+    # so "launched N services" can never quietly cover a half-up stack.
+    fully_up = launched_count - len(partial_services)
+
+    print(f"\n[INFO] Successfully launched: {fully_up} services (fully healthy)")
+    if partial_services:
+        print(f"[PARTIAL] {len(partial_services)} service(s) came up only partially:")
+        for name in partial_services:
+            ports = service_health_ports(_launch_registry().get(f"BAT:{name}", {}))
+            detail = f" (requires ports {', '.join(str(p) for p in ports)})" if ports else ""
+            print(f"  [PARTIAL] {name}{detail}")
+        print(f"[PARTIAL] Treat these as FAILED starts - check logs in: {LOGS_DIR}")
     if failed_services:
         print(f"[WARN] Failed to launch: {len(failed_services)} service(s)")
         print(f"[WARN] Failed services: {', '.join(failed_services)}")
         print(f"[INFO] Check logs in: {LOGS_DIR}")
-    else:
-        print(f"[OK] All services launched successfully")
-    print(f"[INFO] Browser tabs opened for web services")
+    if not failed_services and not partial_services:
+        print(f"[OK] All launcher targets started successfully")
+    if cov_errors:
+        print(
+            f"[WARN] {len(cov_errors)} dashboard/launcher config issue(s) were reported "
+            f"before launch — fix those even if processes started."
+        )
+    print(f"[INFO] Chrome opened to the Debug Page when available")
     print(f"[INFO] Services are running in background")
     print()
 
