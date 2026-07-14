@@ -1,0 +1,22 @@
+{
+  "runtime_root": "C:\\Coding Projects\\Tearsheet Generator\\.worktrees\\live-deploy-main",
+  "dirty_root": "C:\\Coding Projects\\Tearsheet Generator",
+  "client_launchers": {
+    "TKP Tearsheet": "reboot_tkp_ts.bat",
+    "TCP Tearsheet": "reboot_tcp_ts.bat",
+    "Momentum Pacer Tearsheet": "reboot_mp_ts.bat",
+    "AGM Tearsheet": "reboot_mp_ts.bat"
+  },
+  "staff_launchers": {
+    "TKP Tearsheet": "reboot_tkp_staff.ps1",
+    "TCP Tearsheet": "reboot_tcp_staff.bat",
+    "Momentum Pacer Tearsheet": "reboot_mp_staff.bat",
+    "AGM Tearsheet": "reboot_mp_staff.bat"
+  },
+  "service_folders": {
+    "TKP Tearsheet": "",
+    "TCP Tearsheet": "",
+    "Momentum Pacer Tearsheet": "Momentum Pacer",
+    "AGM Tearsheet": "Momentum Pacer"
+  }
+}
