@@ -139,6 +139,15 @@ DEBUG_SITE_LAUNCH_TARGETS: Dict[str, List[str]] = {
     "VizLab": ["NEXTJS:VizLab"],
 }
 
+# These services have either multi-process startup or slow, data-heavy cold
+# starts. A single bounded retry after the machine's other services settle keeps
+# a transient boot-time exit from becoming a permanent outage.
+STARTUP_RETRY_BAT_SERVICES = (
+    "Glenn Uploader",
+    "TKP Tearsheet",
+    "Gold Maker",
+)
+
 
 class ExistingServiceHandle:
     """Small process-like handle for a service that is already listening."""
@@ -406,7 +415,9 @@ def _popen_new_window_bat(title: str, bat_name: str, cwd: str) -> subprocess.Pop
         a detached, visible console window that survives.
     """
     safe_title = escape_cmd_title(title)
-    cmd_string = f'start "{safe_title}" cmd.exe /k "call \"{bat_name}\""'
+    # Use an explicit cwd-relative path. Bare executable names are not resolved
+    # from the current directory when NoDefaultCurrentDirectoryInExePath is set.
+    cmd_string = f'start "{safe_title}" cmd.exe /k "call \".\\{bat_name}\""'
     return subprocess.Popen(cmd_string, cwd=cwd, shell=True)
 
 
@@ -989,6 +1000,52 @@ def _launch_phase_items(
     print(f"[{phase_label}] Parallel batch complete ({n} services).")
 
 
+def retry_affected_bat_services(
+    all_services: Dict[str, Any], failed_services: List[str]
+) -> List[str]:
+    """Retry the affected boot-sensitive BAT services once if still offline."""
+    still_down: List[str] = []
+
+    for name in STARTUP_RETRY_BAT_SERVICES:
+        config = BAT_SERVICES[name]
+        ports = service_health_ports(config)
+        if ports and all(
+            is_port_listening("127.0.0.1", port, timeout=1.0) for port in ports
+        ):
+            print(f"[RETRY-SKIP] {name} is already fully online.")
+            continue
+
+        print(f"[RETRY] Relaunching {name} once (ports {ports})...")
+        process = launch_bat_service(name, config)
+        if process and ports:
+            health_timeout = float(config.get("health_timeout", 60))
+            status = _wait_for_ports(
+                name,
+                process,
+                ports,
+                timeout=health_timeout,
+                early_exit_grace=health_timeout,
+            )
+        else:
+            status = {port: False for port in ports}
+
+        state = classify_port_health(status)
+        service_health_state[name] = state
+        if state == HEALTH_ONLINE:
+            if process:
+                all_services[name] = process
+            while name in failed_services:
+                failed_services.remove(name)
+            print(f"[RETRY-OK] {name} is fully online.")
+        else:
+            still_down.append(name)
+            if name not in failed_services:
+                failed_services.append(name)
+            print(f"[RETRY-FAIL] {name} remains {state} on ports {ports}.")
+
+    return still_down
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN LAUNCHER
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1123,6 +1180,16 @@ def launch_all_services() -> Tuple[Dict[str, subprocess.Popen], Dict[str, int]]:
     )
     print(f"[PHASE 6] Complete. Pausing {PHASE_PAUSE}s before next phase...")
     time.sleep(PHASE_PAUSE)
+    print()
+
+    # Phase 6.5: retry only the boot-sensitive services covered by this repair.
+    print("[PHASE 6.5] Verifying affected services; retrying failures once...")
+    still_down = retry_affected_bat_services(all_services, failed_services)
+    if still_down:
+        print(
+            f"[WARN] {len(still_down)} affected service(s) down after retry: "
+            + ", ".join(still_down)
+        )
     print()
 
     # Phase 7: Launch Cloudflare Tunnel
